@@ -1,10 +1,11 @@
-// Service backend (Railway): faucet + top-up Rupiah (simulasi IDRX) + relayer + keeper + order bot + status,
-// satu proses Node tanpa database. Spesifikasi: vault/04-Architecture/Desain Backend.md. Jalankan: node src/server.ts
+// Service backend (Railway): faucet + top-up Rupiah (simulasi IDRX) + relayer + keeper + order bot + dokumen
+// terenkripsi + radius toko + status, satu proses Node tanpa database (file di DATA_DIR, volume Railway). Spesifikasi: vault/04-Architecture/Desain Backend.md. Jalankan: node src/server.ts
 //
 // Env: RPC_URL, FAUCET_PRIVATE_KEY, KEEPER_PRIVATE_KEY, BOT_PRIVATE_KEY, MINTER_PRIVATE_KEY, RELAYER_PRIVATE_KEY,
 //      ALLOWED_ORIGIN (koma; '*' untuk dev), ADMIN_TOKEN, FAUCET_AMOUNT (0.05), FAUCET_MIN_BALANCE (10.5),
 //      RATE_LIMIT_PER_MIN (120), KEEPER (on), BOT (off), KEEPER_INTERVAL_MS (2000), BOT_INTERVAL_MS (8000), PORT (8787),
-//      CONTRACT_ADDRESS, TOKEN_ADDRESS, BATAS_ANTRE, PUBLIC_URL, IDRX_MODE (simulasi|live), TOPUP_MAX, TOPUP_MAX_PER_ADDRESS
+//      CONTRACT_ADDRESS, TOKEN_ADDRESS, BATAS_ANTRE, PUBLIC_URL, IDRX_MODE (simulasi|live), TOPUP_MAX, TOPUP_MAX_PER_ADDRESS,
+//      DATA_DIR (./data), DOKUMEN_KEY (32 byte hex), DOKUMEN_MAX_MB (10), DOKUMEN_TTL_MENIT (120), RADIUS_KM (1.5)
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { formatEther, parseEther, type Address, type WalletClient } from 'viem';
 import { formatRupiah } from '@printpitt/shared';
@@ -12,6 +13,9 @@ import { ApiError, dompet, jeda, koneksi, log, pesanError } from './common.ts';
 import { buatAntrean } from './lib/antrean.ts';
 import { buatBot } from './lib/bot.ts';
 import { halamanBayar } from './lib/checkout.ts';
+import { buatDokumen } from './lib/dokumen.ts';
+import { buatIndeksOrder } from './lib/indeksOrder.ts';
+import { buatLokasi } from './lib/lokasi.ts';
 import { buatFaucet } from './lib/faucet.ts';
 import { buatKeeper } from './lib/keeper.ts';
 import { buatRelayer } from './lib/relayer.ts';
@@ -23,6 +27,8 @@ const RATE = Number(process.env.RATE_LIMIT_PER_MIN ?? 120);   // longgar: penont
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? '';
 const KEEPER_MS = Number(process.env.KEEPER_INTERVAL_MS ?? 2000);
 const PUBLIC_URL = process.env.PUBLIC_URL?.replace(/\/$/, '');
+const DATA_DIR = process.env.DATA_DIR ?? './data';
+const MAX_UPLOAD = Number(process.env.DOKUMEN_MAX_MB ?? 10) * 1024 * 1024;
 const bot = { on: process.env.BOT === 'on', intervalMs: Number(process.env.BOT_INTERVAL_MS ?? 8000) };
 
 const k = await koneksi();
@@ -44,6 +50,9 @@ const isiSaldoBot = mWallet && topup.mode === 'simulasi'
   ? async (ke: Address) => { const { receipt } = await topup.cetak(ke, 1_000_000); await receipt; log('bot', 'saldo tIDRX diisi minter'); }
   : undefined;
 const orderBot = bWallet && buatBot(k, bWallet, isiSaldoBot);
+const indeks = buatIndeksOrder(k);
+const dokumen = buatDokumen(k, indeks, DATA_DIR);
+const lokasi = buatLokasi(k, indeks, DATA_DIR);
 if (!ALLOWED.length) log('server', 'PERINGATAN: ALLOWED_ORIGIN kosong, browser tidak bisa memanggil service');
 if (!faucet) log('server', 'PERINGATAN: FAUCET_PRIVATE_KEY kosong, /faucet nonaktif');
 if (!mWallet) log('server', 'PERINGATAN: MINTER_PRIVATE_KEY kosong, top-up tidak bisa mencetak tIDRX');
@@ -81,11 +90,18 @@ function cors(req: IncomingMessage, res: ServerResponse) {
   if (ALLOWED.includes('*')) res.setHeader('Access-Control-Allow-Origin', '*');
   else if (origin && ALLOWED.includes(origin)) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'content-type,authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type,authorization,x-nama-file');
+  res.setHeader('Access-Control-Expose-Headers', 'content-disposition');
 }
 function kirim(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+/** Body mentah (upload dokumen), dibatasi DOKUMEN_MAX_MB. */
+async function bacaMentah(req: IncomingMessage) {
+  const bagian: Buffer[] = []; let n = 0;
+  for await (const chunk of req) { n += chunk.length; if (n > MAX_UPLOAD) throw new ApiError('FILE_TOO_LARGE', 413); bagian.push(chunk); }
+  return Buffer.concat(bagian);
 }
 async function bacaJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   let raw = '';
@@ -115,6 +131,9 @@ async function status() {
     faucet: faucet ? { address: faucet.alamat, balance: s.faucet!.mon, funded: faucet.stats.funded, ditolak: faucet.stats.ditolak, gagal: faucet.stats.gagal, queue: faucet.panjangAntre() } : null,
     topup: { mode: topup.mode, minter: topup.minter, balance: s.minter?.mon ?? null, ...topup.stats },
     relayer: relayer ? { address: relayer.alamat, balance: s.relayer!.mon, fee: s.relayer!.tidrx, queue: relayer.panjangAntre(), ...relayer.stats } : null,
+    indeks: indeks.stats(),
+    dokumen: dokumen.stats(),
+    lokasi: lokasi.jumlah(),
     keeper: keeper ? { on: true, address: kWallet!.account!.address, balance: s.keeper!.mon, expired: keeper.stats.expired, aktif: keeper.aktif.size } : { on: false },
     bot: orderBot ? { on: bot.on, intervalMs: bot.intervalMs, address: bWallet!.account!.address, balance: s.bot!.mon, tidrx: s.bot!.tidrx, orders: orderBot.stats.orders, gagal: orderBot.stats.gagal } : { on: false },
   };
@@ -127,6 +146,8 @@ async function config() {
 }
 
 // ---------- rute ----------
+const DOK = /^\/dokumen\/(0x[0-9a-fA-F]{64})$/, DOK_UNDUH = /^\/dokumen\/(0x[0-9a-fA-F]{64})\/unduh$/;
+const FEED = /^\/toko\/(0x[0-9a-fA-F]{40})\/feed$/, LOKASI_ORDER = /^\/order\/(\d{1,19})\/lokasi$/;
 const TOPUP_ID = /^\/topup\/([0-9a-f-]{36})$/, BAYAR_ID = /^\/topup\/([0-9a-f-]{36})\/bayar$/, HALAMAN = /^\/bayar\/([0-9a-f-]{36})$/;
 
 const server = createServer(async (req, res) => {
@@ -138,6 +159,8 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/status') return kirim(res, 200, await status());
     if (req.method === 'GET' && p === '/config') return kirim(res, 200, await config());
     if (req.method === 'GET' && TOPUP_ID.test(p)) return kirim(res, 200, topup.ambil(TOPUP_ID.exec(p)![1]));
+    if (req.method === 'GET' && DOK.test(p)) return kirim(res, 200, dokumen.info(DOK.exec(p)![1]));
+    if (req.method === 'GET' && FEED.test(p)) return kirim(res, 200, lokasi.feed(FEED.exec(p)![1], url.searchParams.get('semua') === '1'));
     if (req.method === 'GET' && HALAMAN.test(p)) {
       if (topup.mode !== 'simulasi') return kirim(res, 404, { error: 'NOT_FOUND' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -151,6 +174,17 @@ const server = createServer(async (req, res) => {
         return kirim(res, 202, await faucet.minta((await bacaJson(req)).address));
       }
       if (p === '/topup') return kirim(res, 201, await topup.buat(await bacaJson(req), urlDasar(req)));
+      if (p === '/dokumen') {
+        const nama = decodeURIComponent(String(req.headers['x-nama-file'] ?? 'dokumen'));
+        return kirim(res, 201, dokumen.simpan(await bacaMentah(req), nama));
+      }
+      if (DOK_UNDUH.test(p)) {
+        const f = await dokumen.unduh(DOK_UNDUH.exec(p)![1], await bacaJson(req));
+        res.writeHead(200, { 'content-type': f.mime, 'content-disposition': `attachment; filename="${f.nama}"`, 'cache-control': 'no-store' });
+        return res.end(f.isi);
+      }
+      if (p === '/toko/lokasi') return kirim(res, 200, await lokasi.setToko(await bacaJson(req)));
+      if (LOKASI_ORDER.test(p)) return kirim(res, 200, await lokasi.setOrder(BigInt(LOKASI_ORDER.exec(p)![1]), await bacaJson(req)));
       if (BAYAR_ID.test(p)) return kirim(res, 200, await topup.bayar(BAYAR_ID.exec(p)![1]));
       if (p === '/relay/order') {
         if (!relayer) return kirim(res, 503, { error: 'RELAYER_DISABLED' });
@@ -178,12 +212,13 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   log('server', `port ${PORT} · chain ${k.chainId} · contract ${k.contract.address} · tIDRX ${k.token.address} · top-up ${topup.mode}${mWallet ? '' : ' (tanpa minter)'} · relayer ${relayer ? 'on' : 'off'} · faucet ${faucet ? 'on' : 'off'} · keeper ${keeper ? 'on' : 'off'} · bot ${orderBot ? (bot.on ? 'on' : 'siaga') : 'off'}`);
-  void loopKeeper(); void loopBot();
+  indeks.mulai(); void loopKeeper(); void loopBot();
 });
 
 function berhenti(sinyal: string) {
   log('server', `${sinyal}: berhenti…`);
   hidup = false;
+  indeks.berhenti();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();
 }

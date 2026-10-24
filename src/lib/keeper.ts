@@ -2,7 +2,7 @@
 // Waktu dibandingkan dengan timestamp blok terbaru (bukan jam lokal), supaya cocok dengan contract.
 import type { WalletClient } from 'viem';
 import { GAS_LIMIT, STATUS, STATUS_FINAL } from '@printpitt/shared';
-import { log, pesanError, type Koneksi } from '../common.ts';
+import { bacaOrders, log, pesanError, type Koneksi } from '../common.ts';
 
 export function buatKeeper(k: Koneksi, wallet: WalletClient) {
   const { pub, contract, batasAntre } = k;
@@ -20,10 +20,7 @@ export function buatKeeper(k: Koneksi, wallet: WalletClient) {
     if (aktif.size === 0) return;
     const { timestamp: now } = await pub.getBlock();
     const ids = [...aktif];
-    // Satu multicall untuk semua order aktif (RPC publik dibatasi per detik); anvil tanpa Multicall3 → baca satu per satu.
-    const orders = pub.chain?.contracts?.multicall3
-      ? await pub.multicall({ contracts: ids.map((id) => ({ ...contract, functionName: 'getOrder', args: [id] }) as const), allowFailure: false })
-      : await Promise.all(ids.map((id) => pub.readContract({ ...contract, functionName: 'getOrder', args: [id] })));
+    const orders = await bacaOrders(k, ids);
     for (const [i, id] of ids.entries()) {
       const o = orders[i];
       const status = STATUS[o.status];

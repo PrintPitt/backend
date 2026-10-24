@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 CONTRACTS="${CONTRACTS_DIR:-$HERE/../contracts}"
 PORT_RPC=8549; PORT_API=8788; RPC="http://127.0.0.1:$PORT_RPC"
 LOG="$(mktemp -t fk-backend-uji)"
+DATA="$(mktemp -d -t fk-backend-data)"
 K0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 K3=0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6
 K4=0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a
@@ -19,7 +20,7 @@ K7=0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356
 
 anvil --port $PORT_RPC --silent >/dev/null 2>&1 & ANVIL=$!
 SERVER=""
-trap 'kill $ANVIL ${SERVER:-} 2>/dev/null || true; rm -f "$LOG"' EXIT
+trap 'kill $ANVIL ${SERVER:-} 2>/dev/null || true; rm -f "$LOG"; rm -rf "$DATA"' EXIT
 for i in $(seq 100); do cast chain-id --rpc-url $RPC >/dev/null 2>&1 && break; sleep 0.1; done
 
 cd "$CONTRACTS"
@@ -30,7 +31,7 @@ FK=$(node -p "require('./deployments/31337.json').fotokopiKilat"); TIDRX=$(node 
 echo "FotokopiKilat $FK · tIDRX $TIDRX"
 
 cd "$HERE"
-RPC_URL=$RPC CONTRACT_ADDRESS=$FK TOKEN_ADDRESS=$TIDRX BATAS_ANTRE=45 PORT=$PORT_API FAUCET_PRIVATE_KEY=$K5 KEEPER_PRIVATE_KEY=$K4 BOT_PRIVATE_KEY=$K3 \
+DATA_DIR="$DATA" DOKUMEN_KEY=$(openssl rand -hex 32) INDEKS_INTERVAL_MS=500 RPC_URL=$RPC CONTRACT_ADDRESS=$FK TOKEN_ADDRESS=$TIDRX BATAS_ANTRE=45 PORT=$PORT_API FAUCET_PRIVATE_KEY=$K5 KEEPER_PRIVATE_KEY=$K4 BOT_PRIVATE_KEY=$K3 \
   MINTER_PRIVATE_KEY=$K6 RELAYER_PRIVATE_KEY=$K7 \
   ALLOWED_ORIGIN=https://fotokopi-kilat.vercel.app ADMIN_TOKEN=uji-lokal RATE_LIMIT_PER_MIN=100 \
   node src/server.ts > "$LOG" 2>&1 & SERVER=$!

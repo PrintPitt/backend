@@ -96,6 +96,19 @@ export async function siapkan(namaKunci: string) {
 
 export const jeda = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Baca banyak order sekaligus: satu multicall per 150 id (RPC publik dibatasi per detik); anvil tanpa Multicall3 → satu per satu. */
+export async function bacaOrders(k: Koneksi, ids: bigint[]) {
+  const { pub, contract } = k;
+  if (!pub.chain?.contracts?.multicall3) return Promise.all(ids.map((id) => pub.readContract({ ...contract, functionName: 'getOrder', args: [id] })));
+  const hasil = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const potong = ids.slice(i, i + 150);
+    hasil.push(...await pub.multicall({ contracts: potong.map((id) => ({ ...contract, functionName: 'getOrder', args: [id] }) as const), allowFailure: false }));
+  }
+  return hasil;
+}
+export type OrderChain = Awaited<ReturnType<typeof bacaOrders>>[number];
+
 /**
  * Pengamat receipt per blok: satu loop membaca `eth_getBlockReceipts` untuk tiap blok baru dan menyelesaikan semua tx
  * yang sedang ditunggu. 30 tx bersamaan cukup ~3 request/dtk, bukan polling receipt per tx (RPC publik 15 req/dtk).
