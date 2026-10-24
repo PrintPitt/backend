@@ -173,7 +173,7 @@ await kirimToko(tokoA, 'serahkan', [idBaru, rahasia]);
 cek('serahkan dengan QR benar → Finished, toko dibayar, NFT ke penonton',
   (await statusOrder(idBaru)) === 'Finished' && (await saldoT(tokoA.account.address)) > saldoTokoA && (await pub.readContract({ ...fk, functionName: 'ownerOf', args: [idBaru] })) === penonton.address);
 { const masuk = (await saldoT(cfg.treasury)) - saldoTreasury, toko = (await saldoT(tokoA.account.address)) - saldoTokoA;
-  cek('fee platform 3% masuk treasury, toko dapat payout bersih', masuk > 0n && masuk * 10_000n / (masuk + toko) === 300n, `treasury +${masuk}, toko +${toko}`); }
+  cek('fee platform 3% masuk treasury, toko dapat payout bersih', masuk > 0n && masuk === (masuk + toko) * 300n / 10_000n, `treasury +${masuk}, toko +${toko}`); }
 { let st = 200; for (let i = 0; i < 40 && st === 200; i++) { await jeda(250); st = (await fetch(`${BASE}/dokumen/${dokumen}`)).status; }
   cek('dokumen terhapus otomatis setelah order Finished', st === 404); }
 
@@ -192,6 +192,25 @@ await rpc('evm_increaseTime', [Number(jemput) + 1]); await rpc('evm_mine');
 let st2 = 'Siap';
 for (let i = 0; i < 40 && st2 === 'Siap'; i++) { await jeda(250); st2 = await statusOrder(id2); }
 cek('keeper menutup order Siap yang tidak dijemput → Finished', st2 === 'Finished', st2);
+
+// 7c2. order ketiga dikomplain, operator diam → keeper menutup sengketa (50/50) setelah batas sengketa
+{ const r = await json(await post('/faucet', { address: penonton.address })); await pub.waitForTransactionReceipt({ hash: r.body.hash }); }
+const penontonW = createWalletClient({ chain: anvil, account: penonton, transport: http(RPC) });
+const rahasia3 = generatePrivateKey();
+const pesanan3 = { ...pesanan, teks: 'Laporan dikomplain', kodeHash: keccak256(rahasia3) };
+const sig3 = await penonton.signTypedData({ domain: domainPesanan(chainId, cfg.contract), types: PESANAN_TYPES, primaryType: 'Pesanan', message: { ...pesanan3, nonce: 2n } });
+const rr3 = await json(await post('/relay/order', { pesanan: { ...pesanan3, deadline: String(deadline), maxFee: String(fee) }, sig: sig3, izin: null }));
+await pub.waitForTransactionReceipt({ hash: rr3.body.hash });
+const id3 = (await pub.readContract({ ...fk, functionName: 'nextId' })) - 1n;
+await kirimToko(tokoA, 'claim', [id3]);
+await kirimToko(tokoA, 'completeStep', [id3, 2]);
+await pub.waitForTransactionReceipt({ hash: await penontonW.writeContract({ ...fk, functionName: 'komplain', args: [id3] }) });
+cek('pelanggan komplain → Sengketa', (await statusOrder(id3)) === 'Sengketa');
+const batasS = await pub.readContract({ ...fk, functionName: 'batasSengketa' });
+await rpc('evm_increaseTime', [Number(jemput) + Number(batasS) + 1]); await rpc('evm_mine');
+let st3 = 'Sengketa';
+for (let i = 0; i < 40 && st3 === 'Sengketa'; i++) { await jeda(250); st3 = await statusOrder(id3); }
+cek('keeper menutup sengketa basi → Diputuskan (50/50)', st3 === 'Diputuskan', st3);
 
 // 7d. Toko Pro: toko B berlangganan dari saldo payout-nya → radius feed 3 km
 await pub.waitForTransactionReceipt({ hash: await tokoB.writeContract({ ...token, functionName: 'approve', args: [cfg.contract, 10n ** 18n] }) });
