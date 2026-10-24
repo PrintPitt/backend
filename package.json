@@ -9,6 +9,7 @@
     "bot": "node src/order-bot.ts",
     "test": "bash test/uji-anvil.sh",
     "test:testnet": "node test/uji-testnet.mjs",
+    "test:beban": "node test/uji-beban.mjs",
     "sync-shared": "bash scripts/sync-shared.sh"
   },
   "engines": {

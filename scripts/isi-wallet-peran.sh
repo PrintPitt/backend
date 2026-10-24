@@ -12,15 +12,16 @@ WALLET=(--account printpitt-deployer --password-file "$HOME/.foundry/printpitt-d
 
 [ "$(cast chain-id --rpc-url "$RPC")" = "10143" ] || { echo "Bukan Monad testnet (10143), berhenti."; exit 1; }
 
-# peran alamat target_MON
+# peran alamat target_MON. Dari uji beban: relayer ~0,044 MON/pesanan, bot ~0,03 MON/order,
+# faucet 0,05 MON/penonton + 10 MON reserve, toko ~0,02-0,03 MON/order.
 TARGET=(
-  "faucet  0x057BbDE8b0560f078058BF3A0d4ed0ACdE7786cB 20"
-  "relayer 0xBD30D15C1A9FAD3f7Cf4a68cB941aD44fea693aE 5"
-  "keeper  0x612F0C3b0e27668d84d10C79d91921C21bd068CB 2"
-  "minter  0x382D1cfe4036f977C1d7A4ecF8B81E1e67F89e7d 2"
-  "bot     0x8e6363dB5A36df6e269357Ce0699acDD6900935b 2"
-  "toko-a  0xD9B470dd86E9876B59Ec4CCd797811D5a8f293e0 1"
-  "toko-b  0x8B0a62CA2523E33a1B51E28069613f6039Ea1c7F 1"
+  "faucet  0x057BbDE8b0560f078058BF3A0d4ed0ACdE7786cB 30"
+  "relayer 0xBD30D15C1A9FAD3f7Cf4a68cB941aD44fea693aE 20"
+  "keeper  0x612F0C3b0e27668d84d10C79d91921C21bd068CB 3"
+  "minter  0x382D1cfe4036f977C1d7A4ecF8B81E1e67F89e7d 3"
+  "bot     0x8e6363dB5A36df6e269357Ce0699acDD6900935b 5"
+  "toko-a  0xD9B470dd86E9876B59Ec4CCd797811D5a8f293e0 2"
+  "toko-b  0x8B0a62CA2523E33a1B51E28069613f6039Ea1c7F 2"
 )
 
 total=0; rencana=()
