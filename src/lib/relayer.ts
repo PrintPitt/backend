@@ -50,14 +50,15 @@ export function buatRelayer(k: Koneksi, wallet: WalletClient) {
     const pelanggan = args[0].pelanggan;
     if (sedangJalan.has(pelanggan)) { stats.ditolak++; throw new ApiError('PENDING_ORDER', 409); }
     sedangJalan.add(pelanggan);
-    // Simulasi dulu; gagal karena RPC (bukan revert) diulang maks. 3 kali dengan jeda bertambah.
+    // Simulasi dulu; gagal karena RPC diulang maks. 3 kali dengan jeda bertambah.
     for (let coba = 0; ; coba++) {
       try {
         await k.pub.simulateContract({ ...k.contract, functionName: 'createOrderFor', args, account: antrean.alamat });
         break;
       } catch (e) {
         const rev = e instanceof BaseError ? e.walk((x) => x instanceof ContractFunctionRevertedError) : null;
-        if (!(rev instanceof ContractFunctionRevertedError) && coba < 3) { await jeda(500 * 2 ** coba); continue; }
+        // Revert diulang sekali: RPC lain di rotasi bisa tertinggal beberapa blok (mis. saldo top-up belum terlihat).
+        if ((!(rev instanceof ContractFunctionRevertedError) && coba < 3) || (rev instanceof ContractFunctionRevertedError && coba < 1)) { await jeda(500 * 2 ** coba); continue; }
         sedangJalan.delete(pelanggan); stats.ditolak++;
         if (rev instanceof ContractFunctionRevertedError) throw new ApiError(rev.data?.errorName ?? 'REVERTED', 400);
         log('relayer', `simulasi gagal: ${pesanError(e)}`);

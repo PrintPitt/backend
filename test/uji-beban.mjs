@@ -33,6 +33,9 @@ async function fetchTerbatas(url, init) {
 const pub = createPublicClient({ chain: monadTestnet, transport: http(RPC, { fetchFn: fetchTerbatas, retryCount: 5, retryDelay: 1500 }), pollingInterval: 1000 });
 // Toko memakai RPC publik lain (seperti HP toko sungguhan), supaya tidak berbagi limit dengan klien uji.
 const RPC_TOKO = { A: process.env.RPC_TOKO_A ?? 'https://monad-testnet.drpc.org', B: process.env.RPC_TOKO_B ?? 'https://10143.rpc.thirdweb.com' };
+// Tiap toko membaca dan menulis lewat RPC yang sama (RPC berbeda bisa tertinggal beberapa blok).
+const pubToko = Object.fromEntries(Object.entries(RPC_TOKO).map(([k, url]) => [k, createPublicClient({ chain: monadTestnet, transport: http(url, { retryCount: 3, retryDelay: 800 }) })]));
+const errPertama = {};
 const sh = promisify(execFile);
 const jeda = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now(), dtk = () => ((Date.now() - t0) / 1000).toFixed(1);
@@ -127,7 +130,7 @@ async function cast(nama, fungsi, ...args) {
       { env: { ...process.env, PATH: `${process.env.PATH}:${homedir()}/.foundry/bin` } });
     const j = JSON.parse(stdout);
     return { ok: Number(j.status) === 1, gas: Number(BigInt(j.gasUsed)) };
-  } catch (e) { return { ok: false, err: String(e.stderr ?? e.message).split('\n').find((l) => /revert|error/i.test(l)) ?? 'error' }; }
+  } catch (e) { const err = String(e.stderr ?? e.message).split('\n').find((l) => /revert|error/i.test(l)) ?? 'error'; errPertama[nama] ??= err; return { ok: false, err }; }
 }
 
 /** Loop satu toko: ambil order Open tertua yang masih dalam batas antre, claim, kerjakan semua langkah. */
@@ -136,12 +139,13 @@ async function loopToko(nama) {
   while (!berhenti) {
     let ids = [], now, orders;
     try {
-      const next = await pub.readContract({ ...fk, functionName: 'nextId' });
+      const pt = pubToko[nama];
+      const next = await pt.readContract({ ...fk, functionName: 'nextId' });
       for (let i = idAwal; i < next; i++) ids.push(i);
       if (!ids.length) { await jeda(1200); continue; }
       [{ timestamp: now }, orders] = await Promise.all([
-        pub.getBlock(),
-        pub.multicall({ contracts: ids.map((id) => ({ ...fk, functionName: 'getOrder', args: [id] })), allowFailure: false }),
+        pt.getBlock(),
+        pt.multicall({ contracts: ids.map((id) => ({ ...fk, functionName: 'getOrder', args: [id] })), allowFailure: false }),
       ]);
     } catch { statRpc.gagal++; await jeda(2000); continue; }
     const kandidat = ids.filter((id, k) => STATUS[orders[k].status] === 'Open' && now + 3n < BigInt(orders[k].dibuatPada) + BigInt(cfg.batasAntre ?? 45));
@@ -222,7 +226,7 @@ cek('NFT penonton = order penonton yang Finished', nftPenonton.reduce((a, b) => 
 const stAkhir = (await api('/status')).body;
 const monAkhir = await saldoMon();
 console.log('\n--- toko ---');
-for (const [n, s] of Object.entries(tokoStat)) console.log(`toko ${n}: menang claim ${s.menang}, kalah rebutan ${s.kalah}, selesai ${s.selesai}, tx gagal ${s.gagalTx}, gas claim maks ${Math.max(0, ...s.gasClaim)}, gas step maks ${Math.max(0, ...s.gasStep)}`);
+for (const [n, s] of Object.entries(tokoStat)) console.log(`toko ${n} (${RPC_TOKO[n]}): menang claim ${s.menang}, kalah rebutan ${s.kalah} (error pertama: ${errPertama[n] ?? '-'}), selesai ${s.selesai}, tx gagal ${s.gagalTx}, gas claim maks ${Math.max(0, ...s.gasClaim)}, gas step maks ${Math.max(0, ...s.gasStep)}`);
 console.log('--- backend ---');
 console.log(`faucet funded ${stAkhir.faucet.funded}, gagal ${stAkhir.faucet.gagal} · minter minted ${stAkhir.topup.minted}, gagal ${stAkhir.topup.gagal} · relayer sukses ${stAkhir.relayer.sukses}, revert ${stAkhir.relayer.revert}, ditolak ${stAkhir.relayer.ditolak} · keeper expired ${stAkhir.keeper.expired} · bot orders ${stAkhir.bot.orders}, gagal ${stAkhir.bot.gagal}`);
 console.log(`HTTP 429 dari backend ${statistik.http429} (diulang), gagal total ${statistik.httpGagal} · baca RPC klien uji gagal ${statRpc.gagal}`);
