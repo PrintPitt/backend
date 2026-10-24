@@ -44,7 +44,8 @@ const faucet = fWallet && buatFaucet(k, fWallet, {
   dataDir: DATA_DIR,
 });
 const keeper = kWallet && buatKeeper(k, kWallet);
-const topup = buatTopup(k, mWallet && buatAntrean(k, mWallet, 'minter'));
+// Mode voucher (mainnet): MINTER_PRIVATE_KEY = wallet kas berisi IDRX tim.
+const topup = buatTopup(k, mWallet && buatAntrean(k, mWallet, 'minter'), DATA_DIR);
 const relayer = rWallet && buatRelayer(k, rWallet);
 // Saldo bot diisi minter simulasi (Rp1.000.000) bila habis.
 const isiSaldoBot = mWallet && topup.mode === 'simulasi'
@@ -133,7 +134,7 @@ async function status() {
     chainId: k.chainId, contract: k.contract.address, token: k.token.address,
     revenue: { treasury: c.treasury, platformFeeBps: c.platformFeeBps, saldoTreasury: formatRupiah(pendapatan) },
     faucet: faucet ? { address: faucet.alamat, balance: s.faucet!.mon, funded: faucet.stats.funded, ditolak: faucet.stats.ditolak, gagal: faucet.stats.gagal, queue: faucet.panjangAntre(), ...faucet.batas() } : null,
-    topup: { mode: topup.mode, minter: topup.minter, balance: s.minter?.mon ?? null, ...topup.stats },
+    topup: { mode: topup.mode, minter: topup.minter, balance: s.minter?.mon ?? null, saldoToken: s.minter?.tidrx ?? null, voucher: topup.voucher(), ...topup.stats },
     relayer: relayer ? { address: relayer.alamat, balance: s.relayer!.mon, fee: s.relayer!.tidrx, queue: relayer.panjangAntre(), ...relayer.stats } : null,
     indeks: indeks.stats(),
     dokumen: dokumen.stats(),

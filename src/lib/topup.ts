@@ -5,13 +5,20 @@
 //   (GET /bayar/:id) atau POST /topup/:id/bayar, lalu minter mencetak tIDRX ke alamat tujuan.
 // IDRX_MODE=live: diteruskan ke api.idrx.co. BELUM DIUJI: butuh API key bisnis (SPK-19), dan IDRX asli hanya
 //   ada di Monad mainnet (143), bukan testnet tempat contract ini berjalan.
+// IDRX_MODE=voucher (mainnet demo): juri tidak membayar apa pun. Dengan kode akses (TOPUP_KODE) tiap alamat menerima
+//   TOPUP_VOUCHER_RP IDRX sekali, ditransfer dari wallet kas (MINTER_PRIVATE_KEY = kunci kas, berisi IDRX tim).
+//   Alamat yang sudah menerima voucher disimpan di DATA_DIR/voucher-<chain>.json supaya tetap sekali setelah restart.
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { encodeFunctionData, getAddress, isAddress, type Address, type Hash } from 'viem';
 import { GAS_LIMIT, rupiahKeSatuan } from '@printpitt/shared';
 import { ApiError, log, pesanError, type Koneksi } from '../common.ts';
 import type { Antrean } from './antrean.ts';
 
-export const MODE = process.env.IDRX_MODE === 'live' ? 'live' : 'simulasi';
+export const MODE = process.env.IDRX_MODE === 'live' ? 'live' : process.env.IDRX_MODE === 'voucher' ? 'voucher' : 'simulasi';
+const VOUCHER_RP = Number(process.env.TOPUP_VOUCHER_RP ?? 5_000);
+const KODE = process.env.TOPUP_KODE ?? process.env.FAUCET_KODE ?? '';
 const MIN_RP = 20_000;                                            // minimum IDRX
 const MAX_RP = Number(process.env.TOPUP_MAX ?? 1_000_000);
 const MAX_PER_ALAMAT = Number(process.env.TOPUP_MAX_PER_ADDRESS ?? 2_000_000);
@@ -25,7 +32,7 @@ export type StatusMint = 'NOT_MINTED' | 'PROCESSING' | 'MINTED' | 'FAILED';
 export type TopUp = {
   id: string; merchantOrderId: string; reference: string; mode: typeof MODE;
   destinationWalletAddress: Address; networkChainId: string;
-  paymentMethod: 'va' | 'qris'; channelId: 'MANDIRI' | 'BRI' | 'QRIS';
+  paymentMethod: 'va' | 'qris' | 'voucher'; channelId: 'MANDIRI' | 'BRI' | 'QRIS' | 'VOUCHER';
   baseAmount: number; amount: number; fees: { name: string; amount: number }[];
   virtualAccountNo?: string; virtualAccountName?: string; qrString?: string;
   paymentUrl: string; expiredDate: string;
@@ -37,9 +44,13 @@ function hitungBiaya(channel: TopUp['channelId'], rp: number) {
   return [{ name: channel === 'QRIS' ? 'Biaya QRIS (simulasi)' : `Biaya VA ${channel} (simulasi)`, amount: nilai }];
 }
 
-export function buatTopup(k: Koneksi, minter: Antrean | null) {
+export function buatTopup(k: Koneksi, minter: Antrean | null, dataDir?: string) {
   const data = new Map<string, TopUp>();
   const totalPerAlamat = new Map<Address, number>();
+  const fileVoucher = dataDir ? join(dataDir, `voucher-${k.chainId}.json`) : null;
+  const sudahVoucher = new Set<string>(fileVoucher && existsSync(fileVoucher) ? JSON.parse(readFileSync(fileVoucher, 'utf8')) : []);
+  // Gagal menulis file tidak boleh membuat voucher yang sudah terkirim dianggap gagal (bisa diklaim ulang).
+  const simpanVoucher = () => { try { if (fileVoucher) writeFileSync(fileVoucher, JSON.stringify([...sudahVoucher])); } catch (e) { log('topup', `simpan voucher gagal: ${pesanError(e)}`); } };
   const stats = { dibuat: 0, dibayar: 0, minted: 0, gagal: 0 };
   setInterval(() => { const batas = Date.now() - 86_400_000; for (const [id, t] of data) if (t.dibuat < batas) data.delete(id); }, 600_000).unref();
 
@@ -53,6 +64,54 @@ export function buatTopup(k: Koneksi, minter: Antrean | null) {
     return { hash, receipt: k.receipt(hash) };
   }
 
+  /** Voucher: transfer IDRX dari wallet kas (token tanpa `mint`). */
+  async function kirimDariKas(ke: Address, rp: number) {
+    if (!minter) throw new ApiError('KAS_DISABLED', 503);
+    const jumlah = rupiahKeSatuan(rp);
+    const saldo = await k.pub.readContract({ ...k.token, functionName: 'balanceOf', args: [minter.alamat] });
+    if (saldo < jumlah) throw new ApiError('VOUCHER_HABIS', 503);
+    const hash = await minter.kirim({
+      to: k.token.address, gas: GAS_LIMIT.mint,
+      data: encodeFunctionData({ abi: k.token.abi, functionName: 'transfer', args: [ke, jumlah] }),
+    });
+    return { hash, receipt: k.receipt(hash) };
+  }
+
+  /** POST /topup di mode voucher: { destinationWalletAddress, kode } → saldo gratis untuk juri, langsung dikirim. */
+  async function buatVoucher(body: Record<string, unknown>): Promise<TopUp> {
+    if (!KODE || body.kode !== KODE) throw new ApiError('BAD_CODE', 403);
+    const raw = body.destinationWalletAddress;
+    if (typeof raw !== 'string' || !isAddress(raw, { strict: false })) throw new ApiError('BAD_ADDRESS', 400);
+    const ke = getAddress(raw);
+    if (sudahVoucher.has(ke)) throw new ApiError('ALREADY_CLAIMED', 409);
+    sudahVoucher.add(ke);                            // dipesan dulu supaya dua permintaan bersamaan tidak lolos dua-duanya
+    const id = randomUUID();
+    const t: TopUp = {
+      id, merchantOrderId: `FK-${Date.now()}`, reference: `VCR${randomBytes(5).toString('hex').toUpperCase()}`, mode: MODE,
+      destinationWalletAddress: ke, networkChainId: String(k.chainId), paymentMethod: 'voucher', channelId: 'VOUCHER',
+      baseAmount: VOUCHER_RP, amount: 0, fees: [], paymentUrl: '', expiredDate: new Date().toISOString(),
+      paymentStatus: 'PAID', userMintStatus: 'PROCESSING', dibuat: Date.now(),
+    };
+    try {
+      const { hash, receipt } = await kirimDariKas(ke, VOUCHER_RP);
+      t.txHash = hash;
+      simpanVoucher();
+      stats.dibuat++; stats.dibayar++;
+      void receipt.then(
+        (r) => { t.userMintStatus = r.status === 'success' ? 'MINTED' : 'FAILED'; if (r.status === 'success') stats.minted++; else stats.gagal++; },
+        (e) => { t.userMintStatus = 'FAILED'; stats.gagal++; log('topup', `receipt voucher ${id}: ${pesanError(e)}`); },
+      );
+    } catch (e) {
+      sudahVoucher.delete(ke);
+      if (e instanceof ApiError) throw e;
+      log('topup', `voucher ${id} gagal: ${pesanError(e)}`);
+      throw new ApiError('SEND_FAILED', 502);
+    }
+    data.set(id, t);
+    log('topup', `voucher ${t.reference} Rp${VOUCHER_RP} -> ${ke}`);
+    return t;
+  }
+
   function segarkan(t: TopUp) {
     if (t.paymentStatus === 'WAITING_FOR_PAYMENT' && Date.now() > Date.parse(t.expiredDate)) t.paymentStatus = 'EXPIRED';
     return t;
@@ -60,6 +119,7 @@ export function buatTopup(k: Koneksi, minter: Antrean | null) {
 
   /** POST /topup: body sama dengan mint-request IDRX (toBeMinted, destinationWalletAddress, paymentMethod, channelId). */
   async function buat(body: Record<string, unknown>, baseUrl: string): Promise<TopUp> {
+    if (MODE === 'voucher') return buatVoucher(body);
     // string atau angka, maks. 2 desimal (IDRX di chain selain Polygon/BNB)
     if (!/^\d{1,10}(\.\d{1,2})?$/.test(String(body.toBeMinted ?? ''))) throw new ApiError('BAD_AMOUNT', 400);
     const rp = Number(body.toBeMinted);
@@ -101,6 +161,7 @@ export function buatTopup(k: Koneksi, minter: Antrean | null) {
 
   /** Simulasi "pembayaran masuk": tandai PAID lalu cetak tIDRX. Idempoten: bayar dua kali tidak mencetak dua kali. */
   async function bayar(id: string) {
+    if (MODE === 'voucher') return ambil(id);        // voucher sudah dikirim saat dibuat; juri tidak membayar
     if (MODE !== 'simulasi') throw new ApiError('NOT_SIMULATION', 403);
     const t = ambil(id);
     if (t.paymentStatus === 'EXPIRED') throw new ApiError('EXPIRED', 410);
@@ -163,5 +224,8 @@ export function buatTopup(k: Koneksi, minter: Antrean | null) {
     return t;
   }
 
-  return { buat, ambil, bayar, cetak, stats, mode: MODE, minter: minter?.alamat ?? null };
+  return {
+    buat, ambil, bayar, cetak, stats, mode: MODE, minter: minter?.alamat ?? null,
+    voucher: () => (MODE === 'voucher' ? { rp: VOUCHER_RP, diklaim: sudahVoucher.size, pakaiKode: !!KODE } : null),
+  };
 }

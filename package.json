@@ -10,6 +10,7 @@
     "test": "bash test/uji-anvil.sh",
     "test:testnet": "node test/uji-testnet.mjs",
     "test:beban": "node test/uji-beban.mjs",
+    "test:voucher": "bash test/uji-voucher.sh",
     "sync-shared": "bash scripts/sync-shared.sh"
   },
   "engines": {

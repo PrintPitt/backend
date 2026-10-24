@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { formatEther, getAddress, isAddress, parseEther, type Address, type WalletClient } from 'viem';
-import { ApiError, type Koneksi } from '../common.ts';
+import { ApiError, log, pesanError, type Koneksi } from '../common.ts';
 import { buatAntrean } from './antrean.ts';
 
 export function buatFaucet(k: Koneksi, wallet: WalletClient, opt: { amount: bigint; minBalance: bigint; dataDir?: string }) {
@@ -14,7 +14,8 @@ export function buatFaucet(k: Koneksi, wallet: WalletClient, opt: { amount: bigi
   const MAX_TOTAL = process.env.FAUCET_MAX_TOTAL ? parseEther(process.env.FAUCET_MAX_TOTAL) : null;
   const fileTotal = opt.dataDir ? join(opt.dataDir, `faucet-${k.chainId}.json`) : null;
   let total = fileTotal && existsSync(fileTotal) ? BigInt(JSON.parse(readFileSync(fileTotal, 'utf8')).total) : 0n;
-  const simpanTotal = () => { if (fileTotal) writeFileSync(fileTotal, JSON.stringify({ total: total.toString() })); };
+  // Gagal menulis file tidak boleh membuat tx yang sudah terkirim dilaporkan gagal.
+  const simpanTotal = () => { try { if (fileTotal) writeFileSync(fileTotal, JSON.stringify({ total: total.toString() })); } catch (e) { log('faucet', `simpan total gagal: ${pesanError(e)}`); } };
   const from = antrean.alamat;
   const dipesan = new Set<Address>();             // alamat yang sudah diantrekan atau dikirimi (selama service hidup)
   const stats = { funded: 0, ditolak: 0, gagal: 0 };
