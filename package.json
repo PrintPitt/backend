@@ -2,7 +2,7 @@
   "name": "fotokopi-kilat-ops",
   "private": true,
   "type": "module",
-  "description": "Backend Railway (faucet + top-up tIDRX + relayer + keeper + order bot) dan script operator",
+  "description": "Railway backend (faucet + tIDRX top-up + relayer + keeper + order bot) and operator scripts",
   "scripts": {
     "start": "node src/server.ts",
     "keeper": "node src/keeper.ts",

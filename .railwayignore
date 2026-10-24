@@ -1,4 +1,4 @@
-# `railway up` mengunggah berdasarkan file ini (bukan .dockerignore).
+# `railway up` uploads based on this file (not .dockerignore).
 **/node_modules
 **/.env
 **/.env.*

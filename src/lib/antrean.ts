@@ -1,5 +1,5 @@
-// Antrean tx per wallet: satu worker, nonce lokal, supaya banyak permintaan bersamaan tidak bentrok nonce.
-// Dipakai faucet (MON), minter (tIDRX), dan relayer (createOrderFor). Satu wallet = satu antrean.
+// Per-wallet tx queue: one worker and a local nonce, so many concurrent requests never collide on nonces.
+// Used by the faucet (MON), minter (tIDRX) and relayer (createOrderFor). One wallet = one queue.
 import type { Address, Hash, Hex, WalletClient } from 'viem';
 import { log, pesanError, type Koneksi } from '../common.ts';
 
@@ -21,12 +21,12 @@ export function buatAntrean(k: Koneksi, wallet: WalletClient, tag: string) {
     return fee;
   }
 
-  /** Antrekan satu tx. Resolve dengan hash begitu tx diterima node (tanpa menunggu receipt). */
+  /** Enqueue one tx. Resolves with the hash as soon as the node accepts it (without waiting for the receipt). */
   function kirim(req: TxReq) {
     return new Promise<Hash>((resolve, reject) => { antre.push({ req, resolve, reject }); void kerja(); });
   }
 
-  /** Kirim berurutan; error nonce -> sinkron ulang dari chain, maks. 3 kali. */
+  /** Send sequentially; on a nonce error, resync from the chain, up to 3 times. */
   async function kerja() {
     if (jalan) return; jalan = true;
     try {
@@ -37,21 +37,21 @@ export function buatAntrean(k: Koneksi, wallet: WalletClient, tag: string) {
           try {
             if (nonce === null) await syncNonce();
             const f = await fees();
-            // Tanda tangani lokal lalu kirim raw: 1 request RPC per tx (sendTransaction viem menambah eth_chainId tiap kirim).
+            // Sign locally and send raw: 1 RPC request per tx (viem's sendTransaction adds an eth_chainId call on every send).
             const mentah = await wallet.account!.signTransaction!({
               type: 'eip1559', chainId: k.chainId, ...job.req,
               nonce: nonce!, maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas,
             });
             const hash = await k.pub.sendRawTransaction({ serializedTransaction: mentah });
             nonce!++; stats.terkirim++;
-            if (Date.now() - mulai > 5000) log(tag, `kirim lambat ${Date.now() - mulai} ms (coba ${coba + 1}, antre ${antre.length})`);
+            if (Date.now() - mulai > 5000) log(tag, `slow send ${Date.now() - mulai} ms (attempt ${coba + 1}, queued ${antre.length})`);
             job.resolve(hash);
             break;
           } catch (e) {
             const msg = pesanError(e);
-            if (coba < 3 && /nonce|replacement|underpriced|already known/i.test(msg)) { log(tag, `sinkron nonce (${msg})`); await syncNonce(); continue; }
+            if (coba < 3 && /nonce|replacement|underpriced|already known/i.test(msg)) { log(tag, `nonce resync (${msg})`); await syncNonce(); continue; }
             stats.gagal++; nonce = null;
-            log(tag, `gagal kirim ke ${job.req.to}: ${msg}`);
+            log(tag, `send to ${job.req.to} failed: ${msg}`);
             job.reject(e as Error);
             break;
           }

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Uji backend lokal: anvil -> deploy contract -> export -> service -> uji-backend.mjs -> bersih-bersih.
-# Kunci yang dipakai adalah kunci uji publik bawaan anvil (#0 operator, #1/#2 toko, #3 bot, #4 keeper, #5 faucet,
-# #6 minter tIDRX, #7 relayer),
-# hanya untuk chain lokal 31337.
+# Local backend test: anvil -> deploy contract -> export -> service -> uji-backend.mjs -> cleanup.
+# Keys used are anvil's built-in public test keys (#0 operator, #1/#2 shops, #3 bot, #4 keeper, #5 faucet,
+# #6 tIDRX minter, #7 relayer),
+# for local chain 31337 only.
 set -euo pipefail
 export PATH="$PATH:$HOME/.foundry/bin"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-# Repo contracts di sebelah repo backend (bisa diganti lewat CONTRACTS_DIR).
+# Contracts repo next to the backend repo (override with CONTRACTS_DIR).
 CONTRACTS="${CONTRACTS_DIR:-$HERE/../contracts}"
 PORT_RPC=8549; PORT_API=8788; RPC="http://127.0.0.1:$PORT_RPC"
 LOG="$(mktemp -t fk-backend-uji)"
@@ -26,7 +26,7 @@ for i in $(seq 100); do cast chain-id --rpc-url $RPC >/dev/null 2>&1 && break; s
 cd "$CONTRACTS"
 HARGA_PRO=100000 TOKO_A=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 TOKO_B=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC MINTER=$(cast wallet address $K6) \
   forge script script/Deploy.s.sol --rpc-url $RPC --private-key $K0 --broadcast >/dev/null 2>&1
-# Alamat dibaca dari hasil deploy, jadi tidak bergantung pada versi vendor/@printpitt/shared.
+# Addresses are read from the deploy output, so they do not depend on the vendor/@printpitt/shared version.
 FK=$(node -p "require('./deployments/31337.json').fotokopiKilat"); TIDRX=$(node -p "require('./deployments/31337.json').tidrx")
 echo "FotokopiKilat $FK · tIDRX $TIDRX"
 
@@ -39,5 +39,5 @@ for i in $(seq 100); do curl -sf http://127.0.0.1:$PORT_API/health >/dev/null &&
 
 BASE=http://127.0.0.1:$PORT_API RPC_URL=$RPC ADMIN_TOKEN=uji-lokal ORIGIN_OK=https://fotokopi-kilat.vercel.app \
   node test/uji-backend.mjs || GAGAL=1
-echo "--- log service (ekor) ---"; { grep -E "keeper|receipt|rpc" "$LOG" || true; } | tail -8; tail -4 "$LOG"
+echo "--- service log (tail) ---"; { grep -E "keeper|receipt|rpc" "$LOG" || true; } | tail -8; tail -4 "$LOG"
 exit "${GAGAL:-0}"

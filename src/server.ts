@@ -1,8 +1,8 @@
-// Service backend (Railway): faucet + top-up Rupiah (simulasi IDRX) + relayer + keeper + order bot + dokumen
-// terenkripsi + radius toko + status, satu proses Node tanpa database (file di DATA_DIR, volume Railway). Spesifikasi: vault/04-Architecture/Desain Backend.md. Jalankan: node src/server.ts
+// Backend service (Railway): faucet + Rupiah top-up (simulated IDRX) + relayer + keeper + order bot + encrypted
+// documents + shop radius + status, one Node process with no database (files in DATA_DIR, a Railway volume). Spec: vault/04-Architecture/Desain Backend.md. Run: node src/server.ts
 //
 // Env: RPC_URL, FAUCET_PRIVATE_KEY, KEEPER_PRIVATE_KEY, BOT_PRIVATE_KEY, MINTER_PRIVATE_KEY, RELAYER_PRIVATE_KEY,
-//      ALLOWED_ORIGIN (koma; '*' untuk dev), ADMIN_TOKEN, FAUCET_AMOUNT (0.05), FAUCET_MIN_BALANCE (10.5),
+//      ALLOWED_ORIGIN (comma-separated; '*' for dev), ADMIN_TOKEN, FAUCET_AMOUNT (0.05), FAUCET_MIN_BALANCE (10.5),
 //      RATE_LIMIT_PER_MIN (120), KEEPER (on), BOT (off), KEEPER_INTERVAL_MS (2000), BOT_INTERVAL_MS (8000), PORT (8787),
 //      CONTRACT_ADDRESS, TOKEN_ADDRESS, BATAS_ANTRE, PUBLIC_URL, IDRX_MODE (simulasi|live), TOPUP_MAX, TOPUP_MAX_PER_ADDRESS,
 //      DATA_DIR (./data), DOKUMEN_KEY (32 byte hex), DOKUMEN_MAX_MB (10), DOKUMEN_TTL_MENIT (120), RADIUS_KM (1.5)
@@ -23,7 +23,7 @@ import { buatTopup } from './lib/topup.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const ALLOWED = (process.env.ALLOWED_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-const RATE = Number(process.env.RATE_LIMIT_PER_MIN ?? 120);   // longgar: penonton di WiFi venue berbagi satu IP (SPK-05)
+const RATE = Number(process.env.RATE_LIMIT_PER_MIN ?? 120);   // generous: the audience on venue WiFi shares one IP (SPK-05)
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? '';
 const KEEPER_MS = Number(process.env.KEEPER_INTERVAL_MS ?? 2000);
 const PUBLIC_URL = process.env.PUBLIC_URL?.replace(/\/$/, '');
@@ -39,42 +39,42 @@ const mWallet = dompet(k, 'MINTER_PRIVATE_KEY', false);
 const rWallet = dompet(k, 'RELAYER_PRIVATE_KEY', false);
 const faucet = fWallet && buatFaucet(k, fWallet, {
   amount: parseEther(process.env.FAUCET_AMOUNT ?? '0.05'),
-  // Monad reserve balance: transfer value yang membuat saldo < 10 MON revert (kecuali sekali per 3 blok), gas tetap terbayar.
+  // Monad reserve balance: a value transfer that leaves the balance < 10 MON reverts (except once per 3 blocks); gas is still paid.
   minBalance: parseEther(process.env.FAUCET_MIN_BALANCE ?? '10.5'),
   dataDir: DATA_DIR,
 });
 const keeper = kWallet && buatKeeper(k, kWallet);
-// Mode voucher (mainnet): MINTER_PRIVATE_KEY = wallet kas berisi IDRX tim.
+// Voucher mode (mainnet): MINTER_PRIVATE_KEY = the treasury wallet holding the team's IDRX.
 const topup = buatTopup(k, mWallet && buatAntrean(k, mWallet, 'minter'), DATA_DIR);
 const relayer = rWallet && buatRelayer(k, rWallet);
-// Saldo bot diisi minter simulasi (Rp1.000.000) bila habis.
+// The bot's balance is refilled by the simulated minter (Rp1,000,000) when it runs out.
 const isiSaldoBot = mWallet && topup.mode === 'simulasi'
-  ? async (ke: Address) => { const { receipt } = await topup.cetak(ke, 1_000_000); await receipt; log('bot', 'saldo tIDRX diisi minter'); }
+  ? async (ke: Address) => { const { receipt } = await topup.cetak(ke, 1_000_000); await receipt; log('bot', 'tIDRX balance refilled by minter'); }
   : undefined;
 const orderBot = bWallet && buatBot(k, bWallet, isiSaldoBot);
 const indeks = buatIndeksOrder(k);
 const dokumen = buatDokumen(k, indeks, DATA_DIR);
 const lokasi = buatLokasi(k, indeks, DATA_DIR);
-if (!ALLOWED.length) log('server', 'PERINGATAN: ALLOWED_ORIGIN kosong, browser tidak bisa memanggil service');
-if (!faucet) log('server', 'PERINGATAN: FAUCET_PRIVATE_KEY kosong, /faucet nonaktif');
-if (!mWallet) log('server', 'PERINGATAN: MINTER_PRIVATE_KEY kosong, top-up tidak bisa mencetak tIDRX');
-if (!relayer) log('server', 'PERINGATAN: RELAYER_PRIVATE_KEY kosong, /relay/order nonaktif');
-if (!keeper) log('server', 'keeper nonaktif');
+if (!ALLOWED.length) log('server', 'WARNING: ALLOWED_ORIGIN is empty, browsers cannot call the service');
+if (!faucet) log('server', 'WARNING: FAUCET_PRIVATE_KEY is empty, /faucet disabled');
+if (!mWallet) log('server', 'WARNING: MINTER_PRIVATE_KEY is empty, top-up cannot mint tIDRX');
+if (!relayer) log('server', 'WARNING: RELAYER_PRIVATE_KEY is empty, /relay/order disabled');
+if (!keeper) log('server', 'keeper disabled');
 
-// ---------- loop latar ----------
+// ---------- background loops ----------
 let hidup = true;
 async function loopKeeper() {
-  while (hidup && keeper) { try { await keeper.putaran(); } catch (e) { log('keeper', `putaran gagal: ${pesanError(e)}`); } await jeda(KEEPER_MS); }
+  while (hidup && keeper) { try { await keeper.putaran(); } catch (e) { log('keeper', `round failed: ${pesanError(e)}`); } await jeda(KEEPER_MS); }
 }
 async function loopBot() {
   while (hidup && orderBot) {
     if (!bot.on) { await jeda(500); continue; }
-    try { await orderBot.sekali(); } catch (e) { orderBot.stats.gagal++; log('bot', `gagal: ${pesanError(e)}`); }
+    try { await orderBot.sekali(); } catch (e) { orderBot.stats.gagal++; log('bot', `failed: ${pesanError(e)}`); }
     await jeda(bot.intervalMs);
   }
 }
 
-// ---------- util HTTP ----------
+// ---------- HTTP utils ----------
 const hitungan = new Map<string, { n: number; reset: number }>();
 setInterval(() => { const now = Date.now(); for (const [ip, v] of hitungan) if (v.reset < now) hitungan.delete(ip); }, 60_000).unref();
 function kenaLimit(ip: string) {
@@ -99,7 +99,7 @@ function kirim(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
 }
-/** Body mentah (upload dokumen), dibatasi DOKUMEN_MAX_MB. */
+/** Raw body (document upload), capped at DOKUMEN_MAX_MB. */
 async function bacaMentah(req: IncomingMessage) {
   const bagian: Buffer[] = []; let n = 0;
   for await (const chunk of req) { n += chunk.length; if (n > MAX_UPLOAD) throw new ApiError('FILE_TOO_LARGE', 413); bagian.push(chunk); }
@@ -111,7 +111,7 @@ async function bacaJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   try { const v = raw ? JSON.parse(raw) : {}; return v && typeof v === 'object' ? v : {}; } catch { throw new ApiError('BAD_JSON', 400); }
 }
 
-// ---------- status (saldo di-cache 3 dtk) ----------
+// ---------- status (balances cached for 3 s) ----------
 type Saldo = { mon: string; tidrx: string } | null;
 let saldoCache = { at: 0, v: {} as Record<string, Saldo> };
 async function saldoSemua() {
@@ -144,7 +144,7 @@ async function status() {
   };
 }
 
-/** Info publik untuk FE: alamat contract/token/relayer, fee, dan parameter revenue (di-cache 30 dtk). */
+/** Public info for the FE: contract/token/relayer addresses, fees and revenue parameters (cached for 30 s). */
 let configCache = { at: 0, v: {} as Record<string, unknown> };
 async function config() {
   if (Date.now() - configCache.at < 30_000) return configCache.v;
@@ -158,7 +158,7 @@ async function config() {
   return configCache.v;
 }
 
-// ---------- rute ----------
+// ---------- routes ----------
 const DOK = /^\/dokumen\/(0x[0-9a-fA-F]{64})$/, DOK_UNDUH = /^\/dokumen\/(0x[0-9a-fA-F]{64})\/unduh$/;
 const FEED = /^\/toko\/(0x[0-9a-fA-F]{40})\/feed$/, LOKASI_ORDER = /^\/order\/(\d{1,19})\/lokasi$/;
 const TOPUP_ID = /^\/topup\/([0-9a-f-]{36})$/, BAYAR_ID = /^\/topup\/([0-9a-f-]{36})\/bayar$/, HALAMAN = /^\/bayar\/([0-9a-f-]{36})$/;
@@ -225,12 +225,12 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  log('server', `port ${PORT} · chain ${k.chainId} · contract ${k.contract.address} · tIDRX ${k.token.address} · top-up ${topup.mode}${mWallet ? '' : ' (tanpa minter)'} · relayer ${relayer ? 'on' : 'off'} · faucet ${faucet ? 'on' : 'off'} · keeper ${keeper ? 'on' : 'off'} · bot ${orderBot ? (bot.on ? 'on' : 'siaga') : 'off'}`);
+  log('server', `port ${PORT} · chain ${k.chainId} · contract ${k.contract.address} · tIDRX ${k.token.address} · top-up ${topup.mode}${mWallet ? '' : ' (no minter)'} · relayer ${relayer ? 'on' : 'off'} · faucet ${faucet ? 'on' : 'off'} · keeper ${keeper ? 'on' : 'off'} · bot ${orderBot ? (bot.on ? 'on' : 'standby') : 'off'}`);
   indeks.mulai(); void loopKeeper(); void loopBot();
 });
 
 function berhenti(sinyal: string) {
-  log('server', `${sinyal}: berhenti…`);
+  log('server', `${sinyal}: shutting down…`);
   hidup = false;
   indeks.berhenti();
   server.close(() => process.exit(0));
