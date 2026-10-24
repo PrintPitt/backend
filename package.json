@@ -11,6 +11,7 @@
     "test:testnet": "node test/uji-testnet.mjs",
     "test:beban": "node test/uji-beban.mjs",
     "test:voucher": "bash test/uji-voucher.sh",
+    "test:mainnet": "node test/uji-mainnet.mjs",
     "sync-shared": "bash scripts/sync-shared.sh"
   },
   "engines": {
