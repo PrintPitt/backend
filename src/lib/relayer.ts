@@ -6,7 +6,7 @@ import {
   type Address, type Hex, type WalletClient,
 } from 'viem';
 import { GAS_LIMIT, teksValid } from '@printpitt/shared';
-import { ApiError, log, pesanError, type Koneksi } from '../common.ts';
+import { ApiError, jeda, log, pesanError, type Koneksi } from '../common.ts';
 import { buatAntrean } from './antrean.ts';
 
 const angka = (v: unknown, nama: string) => {
@@ -50,14 +50,19 @@ export function buatRelayer(k: Koneksi, wallet: WalletClient) {
     const pelanggan = args[0].pelanggan;
     if (sedangJalan.has(pelanggan)) { stats.ditolak++; throw new ApiError('PENDING_ORDER', 409); }
     sedangJalan.add(pelanggan);
-    try {
-      await k.pub.simulateContract({ ...k.contract, functionName: 'createOrderFor', args, account: antrean.alamat });
-    } catch (e) {
-      sedangJalan.delete(pelanggan); stats.ditolak++;
-      const rev = e instanceof BaseError ? e.walk((x) => x instanceof ContractFunctionRevertedError) : null;
-      if (rev instanceof ContractFunctionRevertedError) throw new ApiError(rev.data?.errorName ?? 'REVERTED', 400);
-      log('relayer', `simulasi gagal: ${pesanError(e)}`);
-      throw new ApiError('RPC_ERROR', 502);
+    // Simulasi dulu; gagal karena RPC (bukan revert) diulang maks. 3 kali dengan jeda bertambah.
+    for (let coba = 0; ; coba++) {
+      try {
+        await k.pub.simulateContract({ ...k.contract, functionName: 'createOrderFor', args, account: antrean.alamat });
+        break;
+      } catch (e) {
+        const rev = e instanceof BaseError ? e.walk((x) => x instanceof ContractFunctionRevertedError) : null;
+        if (!(rev instanceof ContractFunctionRevertedError) && coba < 3) { await jeda(500 * 2 ** coba); continue; }
+        sedangJalan.delete(pelanggan); stats.ditolak++;
+        if (rev instanceof ContractFunctionRevertedError) throw new ApiError(rev.data?.errorName ?? 'REVERTED', 400);
+        log('relayer', `simulasi gagal: ${pesanError(e)}`);
+        throw new ApiError('RPC_ERROR', 502);
+      }
     }
     try {
       const hash = await antrean.kirim({

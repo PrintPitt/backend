@@ -16,8 +16,13 @@ export function buatKeeper(k: Koneksi, wallet: WalletClient) {
     for (; berikutnya < nextId; berikutnya++) aktif.add(berikutnya);
     if (aktif.size === 0) return;
     const { timestamp: now } = await pub.getBlock();
-    for (const id of [...aktif]) {
-      const o = await pub.readContract({ ...contract, functionName: 'getOrder', args: [id] });
+    const ids = [...aktif];
+    // Satu multicall untuk semua order aktif (RPC publik dibatasi per detik); anvil tanpa Multicall3 → baca satu per satu.
+    const orders = pub.chain?.contracts?.multicall3
+      ? await pub.multicall({ contracts: ids.map((id) => ({ ...contract, functionName: 'getOrder', args: [id] }) as const), allowFailure: false })
+      : await Promise.all(ids.map((id) => pub.readContract({ ...contract, functionName: 'getOrder', args: [id] })));
+    for (const [i, id] of ids.entries()) {
+      const o = orders[i];
       const status = STATUS[o.status];
       if (status === 'Finished' || status === 'Expired') { aktif.delete(id); continue; }
       const lewat =

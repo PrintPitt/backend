@@ -1,20 +1,42 @@
 // Klien viem bersama untuk script ops dan service backend. Konfigurasi lewat env; private key tidak pernah ditulis ke file.
-import { createPublicClient, createWalletClient, defineChain, http, type Hex } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, fallback, http, type Hex, type Transport } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { anvil, monadTestnet } from 'viem/chains';
 import { deploymentUntuk, fotokopiKilatAbi, tidrxAbi } from '@printpitt/shared';
 
-export const RPC_URL = process.env.RPC_URL ?? 'http://127.0.0.1:8545';
+// RPC_URL boleh berisi beberapa URL dipisah koma: dipakai berurutan dengan fallback bila satu gagal / kena limit.
+const URLS = (process.env.RPC_URL ?? 'http://127.0.0.1:8545').split(',').map((s) => s.trim()).filter(Boolean);
+export const RPC_URL = URLS[0];
 const POLL_MS = Number(process.env.POLL_MS ?? 300);
+// RPC publik Monad membatasi 15 request/dtk per IP; tiap URL non-lokal dibatasi RPC_RPS dan request mengantre, bukan gagal.
+const RPS = Number(process.env.RPC_RPS ?? 12);
+const lokal = (url: string) => /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(url);
+
+function transportUrl(url: string): Transport {
+  if (lokal(url)) return http(url);
+  let jejak: number[] = [];
+  const fetchFn: typeof fetch = async (input, init) => {
+    for (;;) {
+      const now = Date.now();
+      jejak = jejak.filter((t) => now - t < 1000);
+      if (jejak.length < RPS) { jejak.push(now); break; }
+      await jeda(1000 - (now - jejak[0]) + 5);
+    }
+    return fetch(input, init);
+  };
+  return http(url, { fetchFn, retryCount: 2, retryDelay: 400 });
+}
+/** Satu transport untuk semua client (public + wallet), supaya limiter per URL berlaku bersama. */
+const TRANSPORT: Transport = URLS.length === 1 ? transportUrl(URLS[0]) : fallback(URLS.map(transportUrl), { retryCount: 1 });
 
 /** Chain, public client, contract, dan token tIDRX. CONTRACT_ADDRESS / TOKEN_ADDRESS / BATAS_ANTRE di env menimpa file deployment. */
 export async function koneksi() {
-  const probe = createPublicClient({ transport: http(RPC_URL) });
+  const probe = createPublicClient({ transport: TRANSPORT });
   const chainId = await probe.getChainId();
   const chain =
     chainId === monadTestnet.id ? monadTestnet : chainId === anvil.id ? anvil : defineChain({ ...anvil, id: chainId });
   // Blok Monad ~0,3 dtk (SPK-03): polling receipt default viem (4 dtk) terlalu lambat.
-  const pub = createPublicClient({ chain, transport: http(RPC_URL), pollingInterval: POLL_MS });
+  const pub = createPublicClient({ chain, transport: TRANSPORT, pollingInterval: POLL_MS });
   const override = process.env.CONTRACT_ADDRESS as Hex | undefined;
   const d = override
     ? { address: override, tidrx: process.env.TOKEN_ADDRESS, batasAntre: Number(process.env.BATAS_ANTRE ?? 45) }
@@ -32,7 +54,7 @@ export function dompet(k: Koneksi, namaKunci: string, wajib = true) {
   const key = process.env[namaKunci] as Hex | undefined;
   if (!key){ if (wajib) throw new Error(`Set env ${namaKunci} (private key). Jangan simpan di file.`); return null; }
   const account = privateKeyToAccount(key);
-  return createWalletClient({ chain: k.chain, account, transport: http(RPC_URL), pollingInterval: POLL_MS });
+  return createWalletClient({ chain: k.chain, account, transport: TRANSPORT, pollingInterval: POLL_MS });
 }
 
 /** Untuk script CLI: koneksi + satu wallet. */
