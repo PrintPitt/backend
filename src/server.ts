@@ -2,7 +2,7 @@
 // satu proses Node tanpa database. Spesifikasi: vault/04-Architecture/Desain Backend.md. Jalankan: node src/server.ts
 //
 // Env: RPC_URL, FAUCET_PRIVATE_KEY, KEEPER_PRIVATE_KEY, BOT_PRIVATE_KEY, MINTER_PRIVATE_KEY, RELAYER_PRIVATE_KEY,
-//      ALLOWED_ORIGIN (koma; '*' untuk dev), ADMIN_TOKEN, FAUCET_AMOUNT (0.05), FAUCET_MIN_BALANCE (0.5),
+//      ALLOWED_ORIGIN (koma; '*' untuk dev), ADMIN_TOKEN, FAUCET_AMOUNT (0.05), FAUCET_MIN_BALANCE (10.5),
 //      RATE_LIMIT_PER_MIN (120), KEEPER (on), BOT (off), KEEPER_INTERVAL_MS (2000), BOT_INTERVAL_MS (8000), PORT (8787),
 //      CONTRACT_ADDRESS, TOKEN_ADDRESS, BATAS_ANTRE, PUBLIC_URL, IDRX_MODE (simulasi|live), TOPUP_MAX, TOPUP_MAX_PER_ADDRESS
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -33,7 +33,8 @@ const mWallet = dompet(k, 'MINTER_PRIVATE_KEY', false);
 const rWallet = dompet(k, 'RELAYER_PRIVATE_KEY', false);
 const faucet = fWallet && buatFaucet(k, fWallet, {
   amount: parseEther(process.env.FAUCET_AMOUNT ?? '0.05'),
-  minBalance: parseEther(process.env.FAUCET_MIN_BALANCE ?? '0.5'),
+  // Monad reserve balance: transfer value yang membuat saldo < 10 MON revert (kecuali sekali per 3 blok), gas tetap terbayar.
+  minBalance: parseEther(process.env.FAUCET_MIN_BALANCE ?? '10.5'),
 });
 const keeper = kWallet && buatKeeper(k, kWallet);
 const topup = buatTopup(k, mWallet && buatAntrean(k, mWallet, 'minter'));
