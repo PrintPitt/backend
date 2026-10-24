@@ -32,6 +32,7 @@ export function buatAntrean(k: Koneksi, wallet: WalletClient, tag: string) {
     try {
       while (antre.length) {
         const job = antre.shift()!;
+        const mulai = Date.now();
         for (let coba = 0; ; coba++) {
           try {
             if (nonce === null) await syncNonce();
@@ -41,6 +42,7 @@ export function buatAntrean(k: Koneksi, wallet: WalletClient, tag: string) {
               nonce: nonce!, maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas,
             });
             nonce!++; stats.terkirim++;
+            if (Date.now() - mulai > 5000) log(tag, `kirim lambat ${Date.now() - mulai} ms (coba ${coba + 1}, antre ${antre.length})`);
             job.resolve(hash);
             break;
           } catch (e) {

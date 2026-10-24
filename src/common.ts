@@ -31,13 +31,17 @@ async function ambilSlot() {
     await jeda(25);
   }
 }
+const metodeRpc = (init?: RequestInit) => { try { return JSON.parse(String(init?.body)).method ?? 'batch'; } catch { return '?'; } };
 const fetchBagi: typeof fetch = async (_input, init) => {
   let terakhir: Response | undefined;
   for (let coba = 0; coba < slot.length * 2; coba++) {
     const s = await ambilSlot();
+    const mulai = Date.now();
     try {
       const r = await fetch(s.url, init);
       const teks = await r.text();
+      const lama = Date.now() - mulai;
+      if (lama > 5000) log('rpc', `lambat ${lama} ms ${new URL(s.url).host} ${metodeRpc(init)} → ${r.status}`);
       if (r.status === 429 || /requests? limited|rate limit|too many requests/i.test(teks)) { s.istirahat = Date.now() + 1000; terakhir = new Response(teks, r); continue; }
       // URL yang menolak (HTTP >= 400, atau method "tidak tersedia" seperti eth_call dari IP datacenter) diistirahatkan 30 dtk.
       if (r.status >= 400 || /does not exist|is not available|unauthorized|forbidden/i.test(teks)) {
@@ -45,7 +49,10 @@ const fetchBagi: typeof fetch = async (_input, init) => {
         s.istirahat = Date.now() + 30_000; terakhir = new Response(teks, r); continue;
       }
       return new Response(teks, { status: r.status, statusText: r.statusText, headers: r.headers });
-    } catch (e) { s.istirahat = Date.now() + 1000; if (coba === slot.length * 2 - 1) throw e; }
+    } catch (e) {
+      log('rpc', `gagal ${Date.now() - mulai} ms ${new URL(s.url).host} ${metodeRpc(init)}: ${pesanError(e)}`);
+      s.istirahat = Date.now() + 1000; if (coba === slot.length * 2 - 1 || init?.signal?.aborted) throw e;
+    }
   }
   return terakhir!;
 };
