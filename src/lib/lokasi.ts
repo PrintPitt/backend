@@ -1,6 +1,6 @@
-// Radius toko (BLZ-22): toko mendaftarkan lokasi, pelanggan memberi lokasi kasar order-nya (keduanya ditandatangani
-// wallet), lalu feed toko hanya berisi order Open dalam radius. Koordinat dibulatkan ±110 m, tidak pernah on-chain,
-// disimpan di DATA_DIR/lokasi.json supaya bertahan saat restart.
+// Shop radius (BLZ-22): shops register their location, customers give a rough location for their order (both signed
+// by the wallet), and a shop's feed only lists Open orders within its radius. Coordinates are rounded to ±110 m, never go onchain,
+// and are stored in DATA_DIR/lokasi.json so they survive restarts.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAddress, isAddress, isHex, recoverMessageAddress, type Hex } from 'viem';
@@ -9,7 +9,7 @@ import { ApiError, log, pesanError, type Koneksi } from '../common.ts';
 import { statusDari, type IndeksOrder } from './indeksOrder.ts';
 
 const RADIUS_KM = Number(process.env.RADIUS_KM ?? 1.5);
-const RADIUS_PRO_KM = Number(process.env.RADIUS_PRO_KM ?? 3);   // Toko Pro (langganan on-chain) melihat order lebih jauh
+const RADIUS_PRO_KM = Number(process.env.RADIUS_PRO_KM ?? 3);   // Toko Pro (onchain subscription) sees orders farther away
 const BERLAKU_MS = 5 * 60_000;
 type Titik = { lat: number; lng: number };
 
@@ -19,7 +19,7 @@ function koordinat(body: Record<string, unknown>): Titik {
   return { lat: bulatkanKoordinat(lat), lng: bulatkanKoordinat(lng) };
 }
 
-/** Pulihkan penanda tangan pesan; `buatPesan` menerima koordinat yang sudah dibulatkan (klien wajib membulatkan dulu). */
+/** Recover the message signer; `buatPesan` takes already-rounded coordinates (the client must round first). */
 async function penanda(body: Record<string, unknown>, buatPesan: (waktu: number) => string) {
   const waktu = Number(body.waktu);
   if (!Number.isFinite(waktu) || Math.abs(Date.now() - waktu) > BERLAKU_MS) throw new ApiError('SIGNATURE_EXPIRED', 401);
@@ -33,24 +33,24 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
   const data: { toko: Record<string, Titik & { diperbarui: number }>; order: Record<string, Titik> } =
     existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { toko: {}, order: {} };
   const simpan = () => writeFileSync(file, JSON.stringify(data));
-  // Status Pro dibaca dari contract (`isPro`), di-cache 60 dtk per toko supaya feed tidak memicu RPC tiap request.
+  // Pro status is read from the contract (`isPro`) and cached 60 s per shop so the feed does not hit RPC on every request.
   const cachePro = new Map<string, { pro: boolean; at: number }>();
   async function radiusUntuk(toko: string) {
     const c = cachePro.get(toko);
     if (c && Date.now() - c.at < 60_000) return c.pro ? RADIUS_PRO_KM : RADIUS_KM;
     let pro = c?.pro ?? false;
     try { pro = await k.pub.readContract({ ...k.contract, functionName: 'isPro', args: [toko as `0x${string}`] }); }
-    catch (e) { log('lokasi', `baca isPro gagal: ${pesanError(e)}`); }
+    catch (e) { log('lokasi', `reading isPro failed: ${pesanError(e)}`); }
     cachePro.set(toko, { pro, at: Date.now() });
     return pro ? RADIUS_PRO_KM : RADIUS_KM;
   }
 
-  // Lokasi order tidak diperlukan lagi setelah order keluar dari Open.
+  // An order's location is no longer needed once the order leaves Open.
   indeks.dengar((id, o) => {
     if (statusDari(o) !== 'Open' && data.order[id.toString()]) { delete data.order[id.toString()]; simpan(); }
   });
 
-  /** POST /toko/lokasi { toko, lat, lng, waktu, sig }: hanya toko yang terdaftar di contract. */
+  /** POST /toko/lokasi { toko, lat, lng, waktu, sig }: only shops registered in the contract. */
   async function setToko(body: Record<string, unknown>) {
     if (typeof body.toko !== 'string' || !isAddress(body.toko, { strict: false })) throw new ApiError('BAD_ADDRESS', 400);
     const toko = getAddress(body.toko), t = koordinat(body);
@@ -58,7 +58,7 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
     if (siapa !== toko) throw new ApiError('BAD_SIG', 401);
     let terdaftar: boolean;
     try { [terdaftar] = await k.pub.readContract({ ...k.contract, functionName: 'toko', args: [toko] }); }
-    catch (e) { log('lokasi', `baca toko gagal: ${pesanError(e)}`); throw new ApiError('RPC_ERROR', 502); }
+    catch (e) { log('lokasi', `reading shop failed: ${pesanError(e)}`); throw new ApiError('RPC_ERROR', 502); }
     if (!terdaftar) throw new ApiError('NOT_SHOP', 403);
     data.toko[toko] = { ...t, diperbarui: Date.now() };
     simpan();
@@ -66,13 +66,13 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
     return { toko, ...t, radiusKm: await radiusUntuk(toko) };
   }
 
-  /** POST /order/:id/lokasi { lat, lng, waktu, sig }: hanya pelanggan order, selama order masih Open. */
+  /** POST /order/:id/lokasi { lat, lng, waktu, sig }: only the order's customer, while the order is still Open. */
   async function setOrder(id: bigint, body: Record<string, unknown>) {
     const t = koordinat(body);
     const siapa = await penanda(body, (w) => pesanLokasiOrder(id, t.lat, t.lng, w));
     let o;
     try { o = await k.pub.readContract({ ...k.contract, functionName: 'getOrder', args: [id] }); }
-    catch (e) { log('lokasi', `baca order gagal: ${pesanError(e)}`); throw new ApiError('RPC_ERROR', 502); }
+    catch (e) { log('lokasi', `reading order failed: ${pesanError(e)}`); throw new ApiError('RPC_ERROR', 502); }
     if (statusDari(o) === 'None') throw new ApiError('NOT_FOUND', 404);
     if (siapa !== o.pelanggan) throw new ApiError('FORBIDDEN', 403);
     if (statusDari(o) !== 'Open') throw new ApiError('NOT_OPEN', 409);
@@ -82,8 +82,8 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
   }
 
   /**
-   * GET /toko/:alamat/feed: order Open yang belum lewat batas antre, dalam radius dari lokasi toko, terdekat dulu.
-   * Radius RADIUS_KM, atau RADIUS_PRO_KM untuk Toko Pro. `semua=1` ikut order tanpa lokasi (mode demo mini-game).
+   * GET /toko/:alamat/feed: Open orders still within the queue deadline and within radius of the shop, nearest first.
+   * Radius is RADIUS_KM, or RADIUS_PRO_KM for Toko Pro. `semua=1` also includes orders without a location (mini-game demo mode).
    */
   async function feed(alamat: string, semua: boolean) {
     if (!isAddress(alamat, { strict: false })) throw new ApiError('BAD_ADDRESS', 400);

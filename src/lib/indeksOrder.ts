@@ -1,5 +1,5 @@
-// Indeks order bersama: satu loop memindai order dari chain (id baru + yang belum final) dan menyimpan salinan terbaru
-// di memori. Dipakai feed toko (radius) dan pembersih dokumen, jadi request HTTP tidak memicu request RPC.
+// Shared order index: one loop scans orders from the chain (new ids + those not yet final) and keeps the latest copy
+// in memory. Used by the shop feed (radius) and the document cleaner, so HTTP requests never trigger RPC requests.
 import { STATUS, STATUS_FINAL } from '@printpitt/shared';
 import { bacaOrders, jeda, log, pesanError, type Koneksi, type OrderChain } from '../common.ts';
 
@@ -26,14 +26,14 @@ export function buatIndeksOrder(k: Koneksi, intervalMs = Number(process.env.INDE
       orders.set(id, o);
       if (sudahFinal(o)) belumFinal.delete(id);
       for (const f of pendengar) {
-        try { f(id, o); } catch (e) { log('indeks', `pendengar gagal #${id}: ${pesanError(e)}`); }
+        try { f(id, o); } catch (e) { log('indeks', `listener failed #${id}: ${pesanError(e)}`); }
       }
     }
   }
 
   async function loop() {
     while (hidup) {
-      try { await putaran(); } catch (e) { stats.gagal++; log('indeks', `putaran gagal: ${pesanError(e)}`); }
+      try { await putaran(); } catch (e) { stats.gagal++; log('indeks', `round failed: ${pesanError(e)}`); }
       await jeda(intervalMs);
     }
   }
@@ -41,11 +41,11 @@ export function buatIndeksOrder(k: Koneksi, intervalMs = Number(process.env.INDE
   return {
     mulai: () => void loop(),
     berhenti: () => { hidup = false; },
-    /** Dipanggil untuk tiap order yang dibaca (termasuk sekali saat menjadi final). */
+    /** Called for every order read (including once when it becomes final). */
     dengar: (f: (id: bigint, o: OrderChain) => void) => { pendengar.push(f); },
     ambil: (id: bigint) => orders.get(id),
     semua: () => orders.entries(),
-    /** Timestamp blok terakhir yang dilihat (detik), dipakai untuk batas antre di feed. */
+    /** Timestamp of the latest block seen (seconds), used for the queue deadline in the feed. */
     waktuBlok: () => waktuBlok,
     stats: () => ({ ...stats, order: orders.size, belumFinal: belumFinal.size }),
   };

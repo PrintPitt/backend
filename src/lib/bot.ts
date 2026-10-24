@@ -1,19 +1,20 @@
-// Order bot: buat satu order acak lewat jalur yang sama dengan penonton (approve tIDRX sekali, lalu createOrder).
+// Order bot: places one random order through the same path as the audience (approve tIDRX once, then createOrder).
 import { maxUint256, type WalletClient } from 'viem';
 import { formatRupiah, GAS_LIMIT, NOL32, teksValid } from '@printpitt/shared';
 import { log, type Koneksi } from '../common.ts';
 
+// Order texts are stored onchain, so they stay in Indonesian (local demo content).
 const TEKS: Record<number, string[]> = {
   1: ['KTP Budi bolak-balik 10x', 'KTP buat daftar CPNS', 'KTP + KK sekalian Mas'],
   2: ['Boarding JOG-CGK 05.40', 'Tiket kereta Taksaka', 'Boarding pass, pesawat 20 menit lagi'],
   3: ['Ijazah S1 Teknik Informatika', 'Ijazah SMA buat lamaran', 'Sertifikat lomba 17-an'],
   4: ['Menu Warung Bu Sri', 'Menu Angkringan Lik Man', 'Menu Kopi Klotok'],
 };
-for (const daftar of Object.values(TEKS)) for (const t of daftar) if (!teksValid(t)) throw new Error(`Teks bot tidak valid: ${t}`);
+for (const daftar of Object.values(TEKS)) for (const t of daftar) if (!teksValid(t)) throw new Error(`Invalid bot text: ${t}`);
 
 const acak = <T>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)];
 
-/** `isiSaldo` (opsional): dipanggil bila saldo tIDRX bot kurang, mis. minter simulasi mencetak saldo baru. */
+/** `isiSaldo` (optional): called when the bot's tIDRX balance is too low, e.g. the simulated minter mints a new balance. */
 export function buatBot(k: Koneksi, wallet: WalletClient, isiSaldo?: (ke: `0x${string}`) => Promise<void>) {
   const { pub, contract, token } = k;
   const saya = wallet.account!.address;
@@ -21,7 +22,7 @@ export function buatBot(k: Koneksi, wallet: WalletClient, isiSaldo?: (ke: `0x${s
 
   async function pastikanToken(harga: bigint) {
     if ((await pub.readContract({ ...token, functionName: 'balanceOf', args: [saya] })) < harga) {
-      if (!isiSaldo) throw new Error('saldo tIDRX bot kurang');
+      if (!isiSaldo) throw new Error('bot tIDRX balance too low');
       await isiSaldo(saya);
     }
     if ((await pub.readContract({ ...token, functionName: 'allowance', args: [saya, contract.address] })) < harga) {
@@ -30,16 +31,16 @@ export function buatBot(k: Koneksi, wallet: WalletClient, isiSaldo?: (ke: `0x${s
         account: wallet.account!, chain: k.chain,
       });
       await k.receipt(hash);
-      log('bot', 'approve tIDRX ke contract');
+      log('bot', 'approved tIDRX for the contract');
     }
   }
 
-  /** Satu order acak. Mengembalikan false bila sesi belum dibuka atau katalog tidak aktif. */
+  /** One random order. Returns false if the session is not open or the catalog item is inactive. */
   async function sekali() {
     const sesiAktif = await pub.readContract({ ...contract, functionName: 'sesiAktif' });
     if (!sesiAktif) return false;
     const jenis = acak([1, 2, 3, 4]);
-    // katalog v2: (hargaDasar, hargaPerHalaman, batasDasar, batasPerHalaman, langkah, jumlahLangkah, aktif, label); bot pesan 1 halaman
+    // catalog v2: (hargaDasar, hargaPerHalaman, batasDasar, batasPerHalaman, langkah, jumlahLangkah, aktif, label); the bot orders 1 page
     const [hargaDasar, hargaPerHalaman, , , , , aktif, label] = await pub.readContract({ ...contract, functionName: 'katalog', args: [jenis] });
     const harga = hargaDasar + hargaPerHalaman;
     if (!aktif) return false;

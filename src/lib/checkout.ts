@@ -1,5 +1,5 @@
-// Halaman checkout PALSU untuk mode simulasi: menggantikan halaman pembayaran IDRX (paymentUrl).
-// Tombol "Bayar" memanggil POST /topup/:id/bayar lalu memantau status sampai MINTED. Tidak ada uang sungguhan.
+// FAKE checkout page for simulation mode: stands in for the IDRX payment page (paymentUrl).
+// The "Pay" button calls POST /topup/:id/bayar, then polls the status until MINTED. No real money involved.
 import type { TopUp } from './topup.ts';
 
 const esc = (s: unknown) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -10,8 +10,8 @@ export function halamanBayar(t: TopUp) {
     ? `<div class="k">Virtual Account ${esc(t.channelId)}</div><div class="v mono">${esc(t.virtualAccountNo)}</div><div class="s">${esc(t.virtualAccountName)}</div>`
     : `<div class="k">QRIS</div><div class="qr mono">${esc(t.qrString)}</div>`;
   const biaya = t.fees.map((f) => `<tr><td>${esc(f.name)}</td><td>${rp(f.amount)}</td></tr>`).join('');
-  return `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Checkout simulasi</title><style>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Simulated checkout</title><style>
 :root{--bg:#f6f3ec;--card:#fff;--ink:#1d1b16;--muted:#6b665b;--line:#e3ddd0;--accent:#1f6f4a;--warn:#9a4b00}
 @media (prefers-color-scheme:dark){:root{--bg:#16150f;--card:#211f18;--ink:#f2efe6;--muted:#a59f90;--line:#38352b;--accent:#5fc28f;--warn:#f0a35a}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,sans-serif;padding:24px 16px}
@@ -23,19 +23,19 @@ table{width:100%;border-collapse:collapse;margin:16px 0}td{padding:6px 0;border-
 tr.total td{font-weight:700;border-bottom:0}button{width:100%;padding:14px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
 button:disabled{opacity:.5;cursor:default}#st{margin-top:12px;font-size:14px;min-height:1.4em}
 </style></head><body><main>
-<span class="badge">SIMULASI · BUKAN PEMBAYARAN ASLI</span>
+<span class="badge">SIMULATION · NOT A REAL PAYMENT</span>
 <h1>Top-up ${rp(t.baseAmount)} tIDRX</h1>
-<div class="s">Ref ${esc(t.reference)} · ke <span class="mono">${esc(t.destinationWalletAddress)}</span></div>
+<div class="s">Ref ${esc(t.reference)} · to <span class="mono">${esc(t.destinationWalletAddress)}</span></div>
 <div style="margin-top:16px">${tujuan}</div>
-<table><tr><td>Saldo diterima</td><td>${rp(t.baseAmount)}</td></tr>${biaya}<tr class="total"><td>Total bayar</td><td>${rp(t.amount)}</td></tr></table>
-<button id="b">Bayar (simulasi)</button><div id="st"></div>
-<div class="s" style="margin-top:12px">Berlaku sampai ${esc(new Date(t.expiredDate).toLocaleString('id-ID'))}</div>
+<table><tr><td>Balance received</td><td>${rp(t.baseAmount)}</td></tr>${biaya}<tr class="total"><td>Total to pay</td><td>${rp(t.amount)}</td></tr></table>
+<button id="b">Pay (simulated)</button><div id="st"></div>
+<div class="s" style="margin-top:12px">Valid until ${esc(new Date(t.expiredDate).toLocaleString('en-GB'))}</div>
 </main><script>
 const id=${JSON.stringify(t.id)},b=document.getElementById('b'),st=document.getElementById('st');
 const tampil=(t)=>{st.textContent=t.paymentStatus+' · '+t.userMintStatus+(t.txHash?' · tx '+t.txHash.slice(0,10)+'…':'');
-  if(t.paymentStatus!=='WAITING_FOR_PAYMENT')b.disabled=true;if(t.userMintStatus==='MINTED')st.textContent='Saldo masuk. Kembali ke game.';};
+  if(t.paymentStatus!=='WAITING_FOR_PAYMENT')b.disabled=true;if(t.userMintStatus==='MINTED')st.textContent='Balance received. Back to the game.';};
 async function pantau(){for(let i=0;i<40;i++){const t=await (await fetch('/topup/'+id)).json();tampil(t);if(['MINTED','FAILED'].includes(t.userMintStatus)||t.paymentStatus==='EXPIRED')return;await new Promise(r=>setTimeout(r,500));}}
-b.onclick=async()=>{b.disabled=true;st.textContent='Memproses…';const r=await fetch('/topup/'+id+'/bayar',{method:'POST'});const j=await r.json();if(!r.ok){st.textContent='Gagal: '+j.error;return;}tampil(j);pantau();};
+b.onclick=async()=>{b.disabled=true;st.textContent='Processing…';const r=await fetch('/topup/'+id+'/bayar',{method:'POST'});const j=await r.json();if(!r.ok){st.textContent='Failed: '+j.error;return;}tampil(j);pantau();};
 pantau();
 </script></body></html>`;
 }

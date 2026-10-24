@@ -1,6 +1,6 @@
-// Relayer: penonton tanpa MON menandatangani `Pesanan` (EIP-712) + `permit` tIDRX; relayer mengirim createOrderFor
-// dan membayar gas MON. Fee relayer (tIDRX) dipotong contract dari saldo penonton ke wallet relayer.
-// Setiap pesanan disimulasikan dulu (eth_call) supaya tanda tangan salah / saldo kurang tidak membakar gas.
+// Relayer: an audience member without MON signs a `Pesanan` (EIP-712) + a tIDRX `permit`; the relayer sends createOrderFor
+// and pays the MON gas. The contract moves the relayer fee (tIDRX) from the user's balance to the relayer wallet.
+// Every order is simulated first (eth_call) so a bad signature / low balance never burns gas.
 import {
   BaseError, ContractFunctionRevertedError, encodeFunctionData, getAddress, isAddress, isHex,
   type Address, type Hex, type WalletClient,
@@ -19,7 +19,7 @@ const bytes32 = (v: unknown, nama: string) => {
   return v as Hex;
 };
 
-/** Ubah body JSON jadi argumen createOrderFor, atau lempar 400. */
+/** Turn the JSON body into createOrderFor arguments, or throw 400. */
 export function parsePesanan(body: Record<string, unknown>) {
   const p = body.pesanan as Record<string, unknown> | undefined;
   if (!p || typeof p !== 'object') throw new ApiError('BAD_PESANAN', 400);
@@ -46,7 +46,7 @@ export function parsePesanan(body: Record<string, unknown>) {
 
 export function buatRelayer(k: Koneksi, wallet: WalletClient) {
   const antrean = buatAntrean(k, wallet, 'relayer');
-  const sedangJalan = new Set<Address>();          // satu pesanan tertunda per pelanggan: nonce berikutnya belum naik
+  const sedangJalan = new Set<Address>();          // one pending order per customer: the next nonce has not been bumped yet
   const stats = { terkirim: 0, ditolak: 0, sukses: 0, revert: 0 };
 
   async function kirim(body: Record<string, unknown>) {
@@ -54,18 +54,18 @@ export function buatRelayer(k: Koneksi, wallet: WalletClient) {
     const pelanggan = args[0].pelanggan;
     if (sedangJalan.has(pelanggan)) { stats.ditolak++; throw new ApiError('PENDING_ORDER', 409); }
     sedangJalan.add(pelanggan);
-    // Simulasi dulu; gagal karena RPC diulang maks. 3 kali dengan jeda bertambah.
+    // Simulate first; RPC failures are retried up to 3 times with growing backoff.
     for (let coba = 0; ; coba++) {
       try {
         await k.pub.simulateContract({ ...k.contract, functionName: 'createOrderFor', args, account: antrean.alamat });
         break;
       } catch (e) {
         const rev = e instanceof BaseError ? e.walk((x) => x instanceof ContractFunctionRevertedError) : null;
-        // Revert diulang sekali: RPC lain di rotasi bisa tertinggal beberapa blok (mis. saldo top-up belum terlihat).
+        // A revert is retried once: another RPC in the rotation may lag a few blocks (e.g. a top-up balance not visible yet).
         if ((!(rev instanceof ContractFunctionRevertedError) && coba < 3) || (rev instanceof ContractFunctionRevertedError && coba < 1)) { await jeda(500 * 2 ** coba); continue; }
         sedangJalan.delete(pelanggan); stats.ditolak++;
         if (rev instanceof ContractFunctionRevertedError) throw new ApiError(rev.data?.errorName ?? 'REVERTED', 400);
-        log('relayer', `simulasi gagal: ${pesanError(e)}`);
+        log('relayer', `simulation failed: ${pesanError(e)}`);
         throw new ApiError('RPC_ERROR', 502);
       }
     }

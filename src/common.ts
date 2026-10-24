@@ -1,4 +1,4 @@
-// Klien viem bersama untuk script ops dan service backend. Konfigurasi lewat env; private key tidak pernah ditulis ke file.
+// Shared viem clients for ops scripts and the backend service. Configured via env; private keys are never written to disk.
 import {
   createPublicClient, createWalletClient, defineChain, formatTransactionReceipt, http, toHex,
   type Hash, type Hex, type PublicClient, type RpcTransactionReceipt, type TransactionReceipt, type Transport,
@@ -7,13 +7,13 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { anvil, monad, monadTestnet } from 'viem/chains';
 import { deploymentUntuk, fotokopiKilatAbi, tidrxAbi } from '@printpitt/shared';
 
-// RPC_URL boleh berisi beberapa URL dipisah koma: beban dibagi bergiliran, URL yang kena limit dilewati.
+// RPC_URL may hold several comma-separated URLs: load is spread round-robin and rate-limited URLs are skipped.
 const URLS = (process.env.RPC_URL ?? 'http://127.0.0.1:8545').split(',').map((s) => s.trim()).filter(Boolean);
 export const RPC_URL = URLS[0];
 const POLL_MS = Number(process.env.POLL_MS ?? 300);
-// RPC publik Monad membatasi 15 request/dtk per IP. Request dibagi bergiliran ke semua URL di RPC_URL, tiap URL
-// non-lokal maks. RPC_RPS request/dtk (lebih dari itu mengantre). URL yang menjawab "limit" diistirahatkan 1 dtk
-// dan request dicoba ke URL lain.
+// The public Monad RPC allows 15 requests/s per IP. Requests rotate across all URLs in RPC_URL, each non-local URL
+// capped at RPC_RPS requests/s (extra requests wait). A URL that answers "limit" is benched for 1 s
+// and the request is retried on another URL.
 const RPS = Number(process.env.RPC_RPS ?? 12);
 const lokal = (url: string) => /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(url);
 const slot = URLS.map((url) => ({ url, jejak: [] as number[], istirahat: 0 }));
@@ -41,31 +41,31 @@ const fetchBagi: typeof fetch = async (_input, init) => {
       const r = await fetch(s.url, init);
       const teks = await r.text();
       const lama = Date.now() - mulai;
-      if (lama > 5000) log('rpc', `lambat ${lama} ms ${new URL(s.url).host} ${metodeRpc(init)} → ${r.status}`);
+      if (lama > 5000) log('rpc', `slow ${lama} ms ${new URL(s.url).host} ${metodeRpc(init)} → ${r.status}`);
       if (r.status === 429 || /requests? limited|rate limit|too many requests/i.test(teks)) { s.istirahat = Date.now() + 1000; terakhir = new Response(teks, r); continue; }
-      // URL yang menolak (HTTP >= 400, atau method "tidak tersedia" seperti eth_call dari IP datacenter) diistirahatkan 30 dtk.
+      // A URL that refuses (HTTP >= 400, or a method "not available" such as eth_call from a datacenter IP) is benched for 30 s.
       if (r.status >= 400 || /does not exist|is not available|unauthorized|forbidden/i.test(teks)) {
-        if (s.istirahat < Date.now()) log('rpc', `${new URL(s.url).host} diistirahatkan 30 dtk: ${r.status} ${teks.slice(0, 120)}`);
+        if (s.istirahat < Date.now()) log('rpc', `${new URL(s.url).host} benched for 30 s: ${r.status} ${teks.slice(0, 120)}`);
         s.istirahat = Date.now() + 30_000; terakhir = new Response(teks, r); continue;
       }
       return new Response(teks, { status: r.status, statusText: r.statusText, headers: r.headers });
     } catch (e) {
-      log('rpc', `gagal ${Date.now() - mulai} ms ${new URL(s.url).host} ${metodeRpc(init)}: ${pesanError(e)}`);
+      log('rpc', `failed ${Date.now() - mulai} ms ${new URL(s.url).host} ${metodeRpc(init)}: ${pesanError(e)}`);
       s.istirahat = Date.now() + 1000; if (coba === slot.length * 2 - 1 || init?.signal?.aborted) throw e;
     }
   }
   return terakhir!;
 };
-/** Satu transport untuk semua client (public + wallet), supaya pembagian beban dan limiter berlaku bersama. */
+/** One transport for every client (public + wallet), so load sharing and the rate limiter apply to all of them. */
 const TRANSPORT: Transport = http(URLS[0], { fetchFn: fetchBagi, retryCount: 2, retryDelay: 300 });
 
-/** Chain, public client, contract, dan token tIDRX. CONTRACT_ADDRESS / TOKEN_ADDRESS / BATAS_ANTRE di env menimpa file deployment. */
+/** Chain, public client, contract and tIDRX token. CONTRACT_ADDRESS / TOKEN_ADDRESS / BATAS_ANTRE in env override the deployment file. */
 export async function koneksi() {
   const probe = createPublicClient({ transport: TRANSPORT });
   const chainId = await probe.getChainId();
   const chain =
     chainId === monadTestnet.id ? monadTestnet : chainId === monad.id ? monad : chainId === anvil.id ? anvil : defineChain({ ...anvil, id: chainId });
-  // Blok Monad ~0,3 dtk (SPK-03): polling receipt default viem (4 dtk) terlalu lambat.
+  // Monad blocks are ~0.3 s (SPK-03): viem's default receipt polling (4 s) is too slow.
   const pub = createPublicClient({ chain, transport: TRANSPORT, pollingInterval: POLL_MS });
   const override = process.env.CONTRACT_ADDRESS as Hex | undefined;
   const d = override
@@ -73,21 +73,21 @@ export async function koneksi() {
     : deploymentUntuk(chainId);
   const contract = { address: d.address as Hex, abi: fotokopiKilatAbi } as const;
   const token = { address: (process.env.TOKEN_ADDRESS ?? d.tidrx) as Hex, abi: tidrxAbi } as const;
-  if (!token.address) throw new Error('Alamat tIDRX tidak ada: set TOKEN_ADDRESS atau export ulang deployment');
+  if (!token.address) throw new Error('tIDRX address missing: set TOKEN_ADDRESS or re-export the deployment');
   return { chain, chainId, pub, contract, token, batasAntre: BigInt(d.batasAntre), receipt: buatPengamatReceipt(pub as PublicClient) };
 }
 
 export type Koneksi = Awaited<ReturnType<typeof koneksi>>;
 
-/** Wallet client untuk satu private key dari env (null bila env kosong dan tidak wajib). */
+/** Wallet client for one private key from env (null if the env var is empty and not required). */
 export function dompet(k: Koneksi, namaKunci: string, wajib = true) {
   const key = process.env[namaKunci] as Hex | undefined;
-  if (!key){ if (wajib) throw new Error(`Set env ${namaKunci} (private key). Jangan simpan di file.`); return null; }
+  if (!key){ if (wajib) throw new Error(`Set env ${namaKunci} (private key). Do not store it in a file.`); return null; }
   const account = privateKeyToAccount(key);
   return createWalletClient({ chain: k.chain, account, transport: TRANSPORT, pollingInterval: POLL_MS });
 }
 
-/** Untuk script CLI: koneksi + satu wallet. */
+/** For CLI scripts: connection + one wallet. */
 export async function siapkan(namaKunci: string) {
   const k = await koneksi();
   const wallet = dompet(k, namaKunci)!;
@@ -96,7 +96,7 @@ export async function siapkan(namaKunci: string) {
 
 export const jeda = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Baca banyak order sekaligus: satu multicall per 150 id (RPC publik dibatasi per detik); anvil tanpa Multicall3 → satu per satu. */
+/** Read many orders at once: one multicall per 150 ids (public RPC is rate-limited per second); anvil has no Multicall3 → one by one. */
 export async function bacaOrders(k: Koneksi, ids: bigint[]) {
   const { pub, contract } = k;
   if (!pub.chain?.contracts?.multicall3) return Promise.all(ids.map((id) => pub.readContract({ ...contract, functionName: 'getOrder', args: [id] })));
@@ -110,9 +110,9 @@ export async function bacaOrders(k: Koneksi, ids: bigint[]) {
 export type OrderChain = Awaited<ReturnType<typeof bacaOrders>>[number];
 
 /**
- * Pengamat receipt per blok: satu loop membaca `eth_getBlockReceipts` untuk tiap blok baru dan menyelesaikan semua tx
- * yang sedang ditunggu. 30 tx bersamaan cukup ~3 request/dtk, bukan polling receipt per tx (RPC publik 15 req/dtk).
- * Tx yang belum terlihat setelah 15 dtk dicek sekali lewat `eth_getTransactionReceipt` (jaring pengaman), gagal setelah 120 dtk.
+ * Per-block receipt watcher: one loop reads `eth_getBlockReceipts` for each new block and resolves every tx
+ * being awaited. 30 concurrent txs cost ~3 requests/s instead of polling receipts per tx (public RPC: 15 req/s).
+ * A tx not seen after 15 s is checked once via `eth_getTransactionReceipt` (safety net); it fails after 120 s.
  */
 function buatPengamatReceipt(pub: PublicClient) {
   type Penunggu = { resolve: (r: TransactionReceipt) => void; reject: (e: Error) => void; sejak: number; dicek: number };
@@ -127,24 +127,24 @@ function buatPengamatReceipt(pub: PublicClient) {
       while (tunggu.size) {
         try {
           const kini = await pub.getBlockNumber({ cacheTime: 0 });
-          if (berikut === null || kini - berikut > 30n) berikut = kini > 3n ? kini - 3n : 0n;   // mulai sedikit ke belakang
+          if (berikut === null || kini - berikut > 30n) berikut = kini > 3n ? kini - 3n : 0n;   // start a few blocks back
           while (berikut <= kini && tunggu.size) {
             const rs = await pub.request({ method: 'eth_getBlockReceipts', params: [toHex(berikut)] }) as RpcTransactionReceipt[] | null;
-            if (!rs) break;                                                                   // RPC ini belum sampai blok tsb
+            if (!rs) break;                                                                   // this RPC has not reached that block yet
             for (const r of rs) if (tunggu.has(r.transactionHash)) selesai(r.transactionHash, formatTransactionReceipt(r));
             berikut++;
           }
           const now = Date.now();
           for (const [hash, ws] of [...tunggu]) {
             const w = ws[0];
-            if (now - w.sejak > 120_000) { for (const x of ws) x.reject(new Error(`receipt ${hash} tidak muncul 120 dtk`)); tunggu.delete(hash); continue; }
+            if (now - w.sejak > 120_000) { for (const x of ws) x.reject(new Error(`receipt ${hash} did not appear within 120 s`)); tunggu.delete(hash); continue; }
             if (now - w.sejak > 15_000 && now - w.dicek > 10_000) {
               w.dicek = now;
               const r = await pub.getTransactionReceipt({ hash }).catch(() => null);
               if (r) selesai(hash, r);
             }
           }
-        } catch (e) { log('receipt', `putaran gagal: ${pesanError(e)}`); }
+        } catch (e) { log('receipt', `round failed: ${pesanError(e)}`); }
         if (tunggu.size) await jeda(400);
       }
     } finally { jalan = false; berikut = null; }
@@ -164,7 +164,7 @@ export function log(tag: string, ...args: unknown[]) {
 
 export const pesanError = (e: unknown) => (e as Error).message.split('\n')[0];
 
-/** Error yang dijawab ke klien HTTP sebagai `{ error: code }` dengan status ini. */
+/** Error returned to the HTTP client as `{ error: code }` with this status. */
 export class ApiError extends Error {
   code: string;
   status: number;
