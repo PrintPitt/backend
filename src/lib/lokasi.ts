@@ -9,6 +9,7 @@ import { ApiError, log, pesanError, type Koneksi } from '../common.ts';
 import { statusDari, type IndeksOrder } from './indeksOrder.ts';
 
 const RADIUS_KM = Number(process.env.RADIUS_KM ?? 1.5);
+const RADIUS_PRO_KM = Number(process.env.RADIUS_PRO_KM ?? 3);   // Toko Pro (langganan on-chain) melihat order lebih jauh
 const BERLAKU_MS = 5 * 60_000;
 type Titik = { lat: number; lng: number };
 
@@ -32,6 +33,17 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
   const data: { toko: Record<string, Titik & { diperbarui: number }>; order: Record<string, Titik> } =
     existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { toko: {}, order: {} };
   const simpan = () => writeFileSync(file, JSON.stringify(data));
+  // Status Pro dibaca dari contract (`isPro`), di-cache 60 dtk per toko supaya feed tidak memicu RPC tiap request.
+  const cachePro = new Map<string, { pro: boolean; at: number }>();
+  async function radiusUntuk(toko: string) {
+    const c = cachePro.get(toko);
+    if (c && Date.now() - c.at < 60_000) return c.pro ? RADIUS_PRO_KM : RADIUS_KM;
+    let pro = c?.pro ?? false;
+    try { pro = await k.pub.readContract({ ...k.contract, functionName: 'isPro', args: [toko as `0x${string}`] }); }
+    catch (e) { log('lokasi', `baca isPro gagal: ${pesanError(e)}`); }
+    cachePro.set(toko, { pro, at: Date.now() });
+    return pro ? RADIUS_PRO_KM : RADIUS_KM;
+  }
 
   // Lokasi order tidak diperlukan lagi setelah order keluar dari Open.
   indeks.dengar((id, o) => {
@@ -50,7 +62,8 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
     if (!terdaftar) throw new ApiError('NOT_SHOP', 403);
     data.toko[toko] = { ...t, diperbarui: Date.now() };
     simpan();
-    return { toko, ...t, radiusKm: RADIUS_KM };
+    cachePro.delete(toko);
+    return { toko, ...t, radiusKm: await radiusUntuk(toko) };
   }
 
   /** POST /order/:id/lokasi { lat, lng, waktu, sig }: hanya pelanggan order, selama order masih Open. */
@@ -70,18 +83,19 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
 
   /**
    * GET /toko/:alamat/feed: order Open yang belum lewat batas antre, dalam radius dari lokasi toko, terdekat dulu.
-   * `semua=1` ikut menampilkan order tanpa lokasi (mode demo mini-game).
+   * Radius RADIUS_KM, atau RADIUS_PRO_KM untuk Toko Pro. `semua=1` ikut order tanpa lokasi (mode demo mini-game).
    */
-  function feed(alamat: string, semua: boolean) {
+  async function feed(alamat: string, semua: boolean) {
     if (!isAddress(alamat, { strict: false })) throw new ApiError('BAD_ADDRESS', 400);
     const toko = data.toko[getAddress(alamat)];
     if (!toko && !semua) throw new ApiError('SHOP_LOCATION_UNKNOWN', 404);
+    const radius = await radiusUntuk(getAddress(alamat));
     const now = indeks.waktuBlok(), hasil = [];
     for (const [id, o] of indeks.semua()) {
       if (statusDari(o) !== 'Open' || now >= BigInt(o.dibuatPada) + k.batasAntre) continue;
       const lok = data.order[id.toString()];
       const jarak = lok && toko ? jarakKm(toko, lok) : null;
-      if (jarak === null ? !semua : jarak > RADIUS_KM) continue;
+      if (jarak === null ? !semua : jarak > radius) continue;
       hasil.push({
         id: id.toString(), jenis: o.jenis, halaman: o.halaman, harga: o.harga.toString(), batasKerja: o.batasKerja,
         teks: o.teks, adaDokumen: BigInt(o.dokumen) !== 0n, pakaiKode: BigInt(o.kodeHash) !== 0n,
@@ -90,7 +104,7 @@ export function buatLokasi(k: Koneksi, indeks: IndeksOrder, dataDir: string) {
       });
     }
     hasil.sort((a, b) => (a.jarakKm ?? 99) - (b.jarakKm ?? 99) || a.dibuatPada - b.dibuatPada);
-    return { toko: toko ?? null, radiusKm: RADIUS_KM, order: hasil };
+    return { toko: toko ?? null, radiusKm: radius, pro: radius === RADIUS_PRO_KM, order: hasil };
   }
 
   return { setToko, setOrder, feed, jumlah: () => ({ toko: Object.keys(data.toko).length, order: Object.keys(data.order).length }) };

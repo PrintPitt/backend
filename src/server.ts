@@ -126,8 +126,11 @@ async function saldoSemua() {
 }
 async function status() {
   const s = await saldoSemua();
+  const c = await config();
+  const pendapatan = await k.pub.readContract({ ...k.token, functionName: 'balanceOf', args: [c.treasury as `0x${string}`] });
   return {
     chainId: k.chainId, contract: k.contract.address, token: k.token.address,
+    revenue: { treasury: c.treasury, platformFeeBps: c.platformFeeBps, saldoTreasury: formatRupiah(pendapatan) },
     faucet: faucet ? { address: faucet.alamat, balance: s.faucet!.mon, funded: faucet.stats.funded, ditolak: faucet.stats.ditolak, gagal: faucet.stats.gagal, queue: faucet.panjangAntre() } : null,
     topup: { mode: topup.mode, minter: topup.minter, balance: s.minter?.mon ?? null, ...topup.stats },
     relayer: relayer ? { address: relayer.alamat, balance: s.relayer!.mon, fee: s.relayer!.tidrx, queue: relayer.panjangAntre(), ...relayer.stats } : null,
@@ -139,10 +142,18 @@ async function status() {
   };
 }
 
-/** Info publik untuk FE: alamat contract/token/relayer dan fee, supaya FE tidak perlu hardcode. */
+/** Info publik untuk FE: alamat contract/token/relayer, fee, dan parameter revenue (di-cache 30 dtk). */
+let configCache = { at: 0, v: {} as Record<string, unknown> };
 async function config() {
-  const fee = await k.pub.readContract({ ...k.contract, functionName: 'feeRelay' });
-  return { chainId: k.chainId, contract: k.contract.address, token: k.token.address, relayer: relayer?.alamat ?? null, feeRelay: fee.toString(), topupMode: topup.mode };
+  if (Date.now() - configCache.at < 30_000) return configCache.v;
+  const baca = (functionName: 'feeRelay' | 'platformFeeBps' | 'treasury' | 'hargaPro') => k.pub.readContract({ ...k.contract, functionName });
+  const [fee, feeBps, treasury, hargaPro] = await Promise.all([baca('feeRelay'), baca('platformFeeBps'), baca('treasury'), baca('hargaPro')]);
+  configCache = { at: Date.now(), v: {
+    chainId: k.chainId, contract: k.contract.address, token: k.token.address, relayer: relayer?.alamat ?? null,
+    feeRelay: fee.toString(), platformFeeBps: Number(feeBps), treasury, hargaPro: hargaPro.toString(), topupMode: topup.mode,
+    radiusKm: Number(process.env.RADIUS_KM ?? 1.5), radiusProKm: Number(process.env.RADIUS_PRO_KM ?? 3),
+  } };
+  return configCache.v;
 }
 
 // ---------- rute ----------
@@ -160,7 +171,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/config') return kirim(res, 200, await config());
     if (req.method === 'GET' && TOPUP_ID.test(p)) return kirim(res, 200, topup.ambil(TOPUP_ID.exec(p)![1]));
     if (req.method === 'GET' && DOK.test(p)) return kirim(res, 200, dokumen.info(DOK.exec(p)![1]));
-    if (req.method === 'GET' && FEED.test(p)) return kirim(res, 200, lokasi.feed(FEED.exec(p)![1], url.searchParams.get('semua') === '1'));
+    if (req.method === 'GET' && FEED.test(p)) return kirim(res, 200, await lokasi.feed(FEED.exec(p)![1], url.searchParams.get('semua') === '1'));
     if (req.method === 'GET' && HALAMAN.test(p)) {
       if (topup.mode !== 'simulasi') return kirim(res, 404, { error: 'NOT_FOUND' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });

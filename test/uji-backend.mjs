@@ -66,7 +66,7 @@ cek('status melaporkan faucet', s.faucet.funded >= 51 && s.faucet.queue === 0, `
 
 // 6. top-up Rupiah (simulasi IDRX) -> tIDRX
 const cfg = (await json(await fetch(BASE + '/config'))).body;
-cek('GET /config memberi token, relayer, fee', !!cfg.token && !!cfg.relayer && cfg.feeRelay === '10000' && cfg.topupMode === 'simulasi', `fee ${cfg.feeRelay}`);
+cek('GET /config memberi token, relayer, fee layanan Rp200, fee platform 3%, harga Pro', !!cfg.token && !!cfg.relayer && cfg.feeRelay === '20000' && cfg.platformFeeBps === 300 && cfg.hargaPro === '100000' && cfg.topupMode === 'simulasi', `fee ${cfg.feeRelay}, ${cfg.platformFeeBps} bps`);
 const token = { address: cfg.token, abi: tidrxAbi }, fk = { address: cfg.contract, abi: fotokopiKilatAbi };
 const saldoT = (a) => pub.readContract({ ...token, functionName: 'balanceOf', args: [a] });
 const penonton = privateKeyToAccount(generatePrivateKey());
@@ -138,7 +138,7 @@ const kirimToko = async (w, functionName, args) => (await pub.waitForTransaction
 const statusOrder = async (id) => STATUS[(await pub.readContract({ ...fk, functionName: 'getOrder', args: [id] })).status];
 const setLokasiToko = async (w, lat, lng, waktu = Date.now()) => json(await post('/toko/lokasi', { toko: w.account.address, lat, lng, waktu, sig: await w.account.signMessage({ message: pesanLokasiToko(w.account.address, lat, lng, waktu) }) }));
 { const r = await setLokasiToko(tokoA, -7.783, 110.367); cek('toko A set lokasi (tanda tangan wallet, toko terdaftar)', r.status === 200 && r.body.radiusKm === 1.5); }
-await setLokasiToko(tokoB, -7.83, 110.41);
+await setLokasiToko(tokoB, -7.80, 110.38);   // ±2 km dari order: di luar 1,5 km, di dalam radius Pro 3 km
 { const waktu = Date.now(); const r = await json(await post('/toko/lokasi', { toko: tokoA.account.address, lat: -7.783, lng: 110.367, waktu, sig: await tokoB.account.signMessage({ message: pesanLokasiToko(tokoA.account.address, -7.783, 110.367, waktu) }) }));
   cek('lokasi toko ditandatangani wallet lain → 401', r.status === 401); }
 { const waktu = Date.now(); const r = await json(await post('/toko/lokasi', { toko: penonton.address, lat: 1, lng: 1, waktu, sig: await penonton.signMessage({ message: pesanLokasiToko(penonton.address, 1, 1, waktu) }) }));
@@ -153,7 +153,7 @@ for (let i = 0; i < 30; i++) {
 feedB = (await json(await fetch(`${BASE}/toko/${tokoB.account.address}/feed?semua=1`))).body;
 const diFeedA = feedA.order?.find((o) => o.id === String(idBaru));
 cek('feed toko A (≤1,5 km) berisi order + jarak + jumlah halaman', !!diFeedA && diFeedA.jarakKm < 1.5 && diFeedA.halaman === 3 && diFeedA.adaDokumen, diFeedA ? `${diFeedA.jarakKm} km` : 'tidak ada');
-cek('feed toko B (±6 km) tidak berisi order', !feedB.order?.some((o) => o.id === String(idBaru)));
+cek('feed toko B (±2 km, belum Pro) tidak berisi order', !feedB.order?.some((o) => o.id === String(idBaru)) && feedB.radiusKm === 1.5);
 
 // 7b. toko A claim → unduh dokumen → kerjakan → Siap → serah terima QR
 await kirimToko(tokoA, 'claim', [idBaru]);
@@ -168,10 +168,12 @@ await kirimToko(tokoA, 'completeStep', [idBaru, 2]);
 cek('langkah terakhir → Siap (menunggu serah terima)', (await statusOrder(idBaru)) === 'Siap');
 { let err = ''; try { await pub.simulateContract({ ...fk, functionName: 'serahkan', args: [idBaru, NOL32], account: tokoA.account }); } catch (e) { err = e.message; }
   cek('serahkan dengan kode salah ditolak (BadCode)', /BadCode/.test(err)); }
-const saldoTokoA = await saldoT(tokoA.account.address);
+const saldoTokoA = await saldoT(tokoA.account.address), saldoTreasury = await saldoT(cfg.treasury);
 await kirimToko(tokoA, 'serahkan', [idBaru, rahasia]);
 cek('serahkan dengan QR benar → Finished, toko dibayar, NFT ke penonton',
   (await statusOrder(idBaru)) === 'Finished' && (await saldoT(tokoA.account.address)) > saldoTokoA && (await pub.readContract({ ...fk, functionName: 'ownerOf', args: [idBaru] })) === penonton.address);
+{ const masuk = (await saldoT(cfg.treasury)) - saldoTreasury, toko = (await saldoT(tokoA.account.address)) - saldoTokoA;
+  cek('fee platform 3% masuk treasury, toko dapat payout bersih', masuk > 0n && masuk * 10_000n / (masuk + toko) === 300n, `treasury +${masuk}, toko +${toko}`); }
 { let st = 200; for (let i = 0; i < 40 && st === 200; i++) { await jeda(250); st = (await fetch(`${BASE}/dokumen/${dokumen}`)).status; }
   cek('dokumen terhapus otomatis setelah order Finished', st === 404); }
 
@@ -190,6 +192,13 @@ await rpc('evm_increaseTime', [Number(jemput) + 1]); await rpc('evm_mine');
 let st2 = 'Siap';
 for (let i = 0; i < 40 && st2 === 'Siap'; i++) { await jeda(250); st2 = await statusOrder(id2); }
 cek('keeper menutup order Siap yang tidak dijemput → Finished', st2 === 'Finished', st2);
+
+// 7d. Toko Pro: toko B berlangganan dari saldo payout-nya → radius feed 3 km
+await pub.waitForTransactionReceipt({ hash: await tokoB.writeContract({ ...token, functionName: 'approve', args: [cfg.contract, 10n ** 18n] }) });
+await kirimToko(tokoB, 'langgananPro', [1]);
+cek('toko B langganan Pro 1 bulan', await pub.readContract({ ...fk, functionName: 'isPro', args: [tokoB.account.address] }));
+{ const r = await setLokasiToko(tokoB, -7.80, 110.38); const f = (await json(await fetch(`${BASE}/toko/${tokoB.account.address}/feed`))).body;
+  cek('feed Toko Pro memakai radius 3 km', r.body.radiusKm === 3 && f.radiusKm === 3 && f.pro === true, `${f.radiusKm} km`); }
 
 // 8. rate limit (RATE_LIMIT_PER_MIN=100 di runner): 50 permintaan lagi dari IP yang sama
 const rl = await Promise.all(Array.from({ length: 50 }, async () => (await post('/faucet', { address: 'x' })).status));

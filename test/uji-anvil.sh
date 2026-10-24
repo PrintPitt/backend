@@ -24,7 +24,7 @@ trap 'kill $ANVIL ${SERVER:-} 2>/dev/null || true; rm -f "$LOG"; rm -rf "$DATA"'
 for i in $(seq 100); do cast chain-id --rpc-url $RPC >/dev/null 2>&1 && break; sleep 0.1; done
 
 cd "$CONTRACTS"
-TOKO_A=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 TOKO_B=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC MINTER=$(cast wallet address $K6) \
+HARGA_PRO=100000 TOKO_A=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 TOKO_B=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC MINTER=$(cast wallet address $K6) \
   forge script script/Deploy.s.sol --rpc-url $RPC --private-key $K0 --broadcast >/dev/null 2>&1
 # Alamat dibaca dari hasil deploy, jadi tidak bergantung pada versi vendor/@printpitt/shared.
 FK=$(node -p "require('./deployments/31337.json').fotokopiKilat"); TIDRX=$(node -p "require('./deployments/31337.json').tidrx")
