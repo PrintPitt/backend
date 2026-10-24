@@ -14,8 +14,18 @@ const JENIS = 5, HALAMAN = 6; // PRINT DOKUMEN 6 halaman (harga per halaman)
 
 const BASE = process.env.BASE ?? 'https://backend-production-2b31.up.railway.app';
 const RPC = process.env.RPC_URL ?? 'https://testnet-rpc.monad.xyz';
-const pub = createPublicClient({ transport: http(RPC), pollingInterval: 300 });
 const jeda = (ms) => new Promise((r) => setTimeout(r, ms));
+// RPC publik membatasi 15 request/dtk per IP: maks. 5 request/dtk, ulangi jawaban "requests limited".
+let jejak = [];
+async function fetchPelan(url, init) {
+  for (let coba = 0; ; coba++) {
+    for (;;) { const now = Date.now(); jejak = jejak.filter((x) => now - x < 1000); if (jejak.length < 5) { jejak.push(now); break; } await jeda(100); }
+    const r = await fetch(url, init); const teks = await r.text();
+    if (coba < 8 && /requests? limited/i.test(teks)) { await jeda(1200); continue; }
+    return new Response(teks, { status: r.status, headers: r.headers });
+  }
+}
+const pub = createPublicClient({ transport: http(RPC, { fetchFn: fetchPelan }), pollingInterval: 1000 });
 const hasil = [];
 const cek = (nama, ok, detail = '') => { hasil.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${nama}${detail ? ' · ' + detail : ''}`); };
 const api = async (path, body) => {

@@ -41,6 +41,7 @@ const faucet = fWallet && buatFaucet(k, fWallet, {
   amount: parseEther(process.env.FAUCET_AMOUNT ?? '0.05'),
   // Monad reserve balance: transfer value yang membuat saldo < 10 MON revert (kecuali sekali per 3 blok), gas tetap terbayar.
   minBalance: parseEther(process.env.FAUCET_MIN_BALANCE ?? '10.5'),
+  dataDir: DATA_DIR,
 });
 const keeper = kWallet && buatKeeper(k, kWallet);
 const topup = buatTopup(k, mWallet && buatAntrean(k, mWallet, 'minter'));
@@ -131,7 +132,7 @@ async function status() {
   return {
     chainId: k.chainId, contract: k.contract.address, token: k.token.address,
     revenue: { treasury: c.treasury, platformFeeBps: c.platformFeeBps, saldoTreasury: formatRupiah(pendapatan) },
-    faucet: faucet ? { address: faucet.alamat, balance: s.faucet!.mon, funded: faucet.stats.funded, ditolak: faucet.stats.ditolak, gagal: faucet.stats.gagal, queue: faucet.panjangAntre() } : null,
+    faucet: faucet ? { address: faucet.alamat, balance: s.faucet!.mon, funded: faucet.stats.funded, ditolak: faucet.stats.ditolak, gagal: faucet.stats.gagal, queue: faucet.panjangAntre(), ...faucet.batas() } : null,
     topup: { mode: topup.mode, minter: topup.minter, balance: s.minter?.mon ?? null, ...topup.stats },
     relayer: relayer ? { address: relayer.alamat, balance: s.relayer!.mon, fee: s.relayer!.tidrx, queue: relayer.panjangAntre(), ...relayer.stats } : null,
     indeks: indeks.stats(),
@@ -182,7 +183,8 @@ const server = createServer(async (req, res) => {
       if (tunggu) return kirim(res, 429, { error: 'RATE_LIMITED', retryAfter: tunggu });
       if (p === '/faucet') {
         if (!faucet) return kirim(res, 503, { error: 'FAUCET_DISABLED' });
-        return kirim(res, 202, await faucet.minta((await bacaJson(req)).address));
+        const body = await bacaJson(req);
+        return kirim(res, 202, await faucet.minta(body.address, body.kode));
       }
       if (p === '/topup') return kirim(res, 201, await topup.buat(await bacaJson(req), urlDasar(req)));
       if (p === '/dokumen') {

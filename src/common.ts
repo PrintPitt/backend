@@ -4,7 +4,7 @@ import {
   type Hash, type Hex, type PublicClient, type RpcTransactionReceipt, type TransactionReceipt, type Transport,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { anvil, monadTestnet } from 'viem/chains';
+import { anvil, monad, monadTestnet } from 'viem/chains';
 import { deploymentUntuk, fotokopiKilatAbi, tidrxAbi } from '@printpitt/shared';
 
 // RPC_URL boleh berisi beberapa URL dipisah koma: beban dibagi bergiliran, URL yang kena limit dilewati.
@@ -64,7 +64,7 @@ export async function koneksi() {
   const probe = createPublicClient({ transport: TRANSPORT });
   const chainId = await probe.getChainId();
   const chain =
-    chainId === monadTestnet.id ? monadTestnet : chainId === anvil.id ? anvil : defineChain({ ...anvil, id: chainId });
+    chainId === monadTestnet.id ? monadTestnet : chainId === monad.id ? monad : chainId === anvil.id ? anvil : defineChain({ ...anvil, id: chainId });
   // Blok Monad ~0,3 dtk (SPK-03): polling receipt default viem (4 dtk) terlalu lambat.
   const pub = createPublicClient({ chain, transport: TRANSPORT, pollingInterval: POLL_MS });
   const override = process.env.CONTRACT_ADDRESS as Hex | undefined;

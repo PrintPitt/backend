@@ -18,7 +18,7 @@ K5=0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba
 K6=0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e
 K7=0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356
 
-anvil --port $PORT_RPC --silent >/dev/null 2>&1 & ANVIL=$!
+anvil --port $PORT_RPC --code-size-limit 131072 --silent >/dev/null 2>&1 & ANVIL=$!
 SERVER=""
 trap 'kill $ANVIL ${SERVER:-} 2>/dev/null || true; rm -f "$LOG"; rm -rf "$DATA"' EXIT
 for i in $(seq 100); do cast chain-id --rpc-url $RPC >/dev/null 2>&1 && break; sleep 0.1; done
