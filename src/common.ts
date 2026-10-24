@@ -36,6 +36,11 @@ const fetchBagi: typeof fetch = async (_input, init) => {
       const r = await fetch(s.url, init);
       const teks = await r.text();
       if (r.status === 429 || /requests? limited|rate limit|too many requests/i.test(teks)) { s.istirahat = Date.now() + 1000; terakhir = new Response(teks, r); continue; }
+      // URL yang menolak (HTTP >= 400, atau method "tidak tersedia" seperti eth_call dari IP datacenter) diistirahatkan 30 dtk.
+      if (r.status >= 400 || /does not exist|is not available|unauthorized|forbidden/i.test(teks)) {
+        if (s.istirahat < Date.now()) log('rpc', `${new URL(s.url).host} diistirahatkan 30 dtk: ${r.status} ${teks.slice(0, 120)}`);
+        s.istirahat = Date.now() + 30_000; terakhir = new Response(teks, r); continue;
+      }
       return new Response(teks, { status: r.status, statusText: r.statusText, headers: r.headers });
     } catch (e) { s.istirahat = Date.now() + 1000; if (coba === slot.length * 2 - 1) throw e; }
   }
