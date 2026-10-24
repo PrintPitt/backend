@@ -31,7 +31,7 @@ export function buatKeeper(k: Koneksi, wallet: WalletClient) {
       if (!lewat) continue;
       try {
         const hash = await wallet.writeContract({ ...contract, functionName: 'expire', args: [id], gas: GAS_LIMIT.expire, account: wallet.account!, chain: k.chain });
-        const r = await pub.waitForTransactionReceipt({ hash });
+        const r = await k.receipt(hash);
         log('keeper', `expire #${id} (${status === 'Open' ? 'antre' : 'kerja'}) → ${r.status}`);
         if (r.status === 'success') { aktif.delete(id); stats.expired++; }
       } catch (e) {

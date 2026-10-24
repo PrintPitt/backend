@@ -32,7 +32,7 @@ async function fetchTerbatas(url, init) {
 }
 const pub = createPublicClient({ chain: monadTestnet, transport: http(RPC, { fetchFn: fetchTerbatas, retryCount: 5, retryDelay: 1500 }), pollingInterval: 1000 });
 // Toko memakai RPC publik lain (seperti HP toko sungguhan), supaya tidak berbagi limit dengan klien uji.
-const RPC_TOKO = { A: process.env.RPC_TOKO_A ?? 'https://monad-testnet.drpc.org', B: process.env.RPC_TOKO_B ?? 'https://10143.rpc.thirdweb.com' };
+const RPC_TOKO = { A: process.env.RPC_TOKO_A ?? 'https://testnet-rpc.monad.xyz', B: process.env.RPC_TOKO_B ?? 'https://10143.rpc.thirdweb.com' };
 // Tiap toko membaca dan menulis lewat RPC yang sama (RPC berbeda bisa tertinggal beberapa blok).
 const pubToko = Object.fromEntries(Object.entries(RPC_TOKO).map(([k, url]) => [k, createPublicClient({ chain: monadTestnet, transport: http(url, { retryCount: 3, retryDelay: 800 }) })]));
 const errPertama = {};

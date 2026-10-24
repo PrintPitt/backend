@@ -50,7 +50,7 @@ export function buatTopup(k: Koneksi, minter: Antrean | null) {
       to: k.token.address, gas: GAS_LIMIT.mint,
       data: encodeFunctionData({ abi: k.token.abi, functionName: 'mint', args: [ke, rupiahKeSatuan(rp)] }),
     });
-    return { hash, receipt: k.pub.waitForTransactionReceipt({ hash }) };
+    return { hash, receipt: k.receipt(hash) };
   }
 
   function segarkan(t: TopUp) {

@@ -1,5 +1,8 @@
 // Klien viem bersama untuk script ops dan service backend. Konfigurasi lewat env; private key tidak pernah ditulis ke file.
-import { createPublicClient, createWalletClient, defineChain, http, type Hex, type Transport } from 'viem';
+import {
+  createPublicClient, createWalletClient, defineChain, formatTransactionReceipt, http, toHex,
+  type Hash, type Hex, type PublicClient, type RpcTransactionReceipt, type TransactionReceipt, type Transport,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { anvil, monadTestnet } from 'viem/chains';
 import { deploymentUntuk, fotokopiKilatAbi, tidrxAbi } from '@printpitt/shared';
@@ -64,7 +67,7 @@ export async function koneksi() {
   const contract = { address: d.address as Hex, abi: fotokopiKilatAbi } as const;
   const token = { address: (process.env.TOKEN_ADDRESS ?? d.tidrx) as Hex, abi: tidrxAbi } as const;
   if (!token.address) throw new Error('Alamat tIDRX tidak ada: set TOKEN_ADDRESS atau export ulang deployment');
-  return { chain, chainId, pub, contract, token, batasAntre: BigInt(d.batasAntre) };
+  return { chain, chainId, pub, contract, token, batasAntre: BigInt(d.batasAntre), receipt: buatPengamatReceipt(pub as PublicClient) };
 }
 
 export type Koneksi = Awaited<ReturnType<typeof koneksi>>;
@@ -85,6 +88,55 @@ export async function siapkan(namaKunci: string) {
 }
 
 export const jeda = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Pengamat receipt per blok: satu loop membaca `eth_getBlockReceipts` untuk tiap blok baru dan menyelesaikan semua tx
+ * yang sedang ditunggu. 30 tx bersamaan cukup ~3 request/dtk, bukan polling receipt per tx (RPC publik 15 req/dtk).
+ * Tx yang belum terlihat setelah 15 dtk dicek sekali lewat `eth_getTransactionReceipt` (jaring pengaman), gagal setelah 120 dtk.
+ */
+function buatPengamatReceipt(pub: PublicClient) {
+  type Penunggu = { resolve: (r: TransactionReceipt) => void; reject: (e: Error) => void; sejak: number; dicek: number };
+  const tunggu = new Map<Hash, Penunggu[]>();
+  let berikut: bigint | null = null, jalan = false;
+
+  const selesai = (hash: Hash, r: TransactionReceipt) => { for (const w of tunggu.get(hash) ?? []) w.resolve(r); tunggu.delete(hash); };
+
+  async function loop() {
+    if (jalan) return; jalan = true;
+    try {
+      while (tunggu.size) {
+        try {
+          const kini = await pub.getBlockNumber({ cacheTime: 0 });
+          if (berikut === null || kini - berikut > 30n) berikut = kini > 3n ? kini - 3n : 0n;   // mulai sedikit ke belakang
+          while (berikut <= kini && tunggu.size) {
+            const rs = await pub.request({ method: 'eth_getBlockReceipts', params: [toHex(berikut)] }) as RpcTransactionReceipt[] | null;
+            if (!rs) break;                                                                   // RPC ini belum sampai blok tsb
+            for (const r of rs) if (tunggu.has(r.transactionHash)) selesai(r.transactionHash, formatTransactionReceipt(r));
+            berikut++;
+          }
+          const now = Date.now();
+          for (const [hash, ws] of [...tunggu]) {
+            const w = ws[0];
+            if (now - w.sejak > 120_000) { for (const x of ws) x.reject(new Error(`receipt ${hash} tidak muncul 120 dtk`)); tunggu.delete(hash); continue; }
+            if (now - w.sejak > 15_000 && now - w.dicek > 10_000) {
+              w.dicek = now;
+              const r = await pub.getTransactionReceipt({ hash }).catch(() => null);
+              if (r) selesai(hash, r);
+            }
+          }
+        } catch (e) { log('receipt', `putaran gagal: ${pesanError(e)}`); }
+        if (tunggu.size) await jeda(400);
+      }
+    } finally { jalan = false; berikut = null; }
+  }
+
+  return (hash: Hash) => new Promise<TransactionReceipt>((resolve, reject) => {
+    const ws = tunggu.get(hash) ?? [];
+    ws.push({ resolve, reject, sejak: Date.now(), dicek: 0 });
+    tunggu.set(hash, ws);
+    void loop();
+  });
+}
 
 export function log(tag: string, ...args: unknown[]) {
   console.log(new Date().toISOString().slice(11, 19), `[${tag}]`, ...args);

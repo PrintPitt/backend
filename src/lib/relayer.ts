@@ -71,7 +71,7 @@ export function buatRelayer(k: Koneksi, wallet: WalletClient) {
         data: encodeFunctionData({ abi: k.contract.abi, functionName: 'createOrderFor', args }),
       });
       stats.terkirim++;
-      void k.pub.waitForTransactionReceipt({ hash }).then(
+      void k.receipt(hash).then(
         (r) => { if (r.status === 'success') stats.sukses++; else stats.revert++; },
         (e) => log('relayer', `receipt ${hash}: ${pesanError(e)}`),
       ).finally(() => sedangJalan.delete(pelanggan));

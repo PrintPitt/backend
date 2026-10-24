@@ -29,7 +29,7 @@ export function buatBot(k: Koneksi, wallet: WalletClient, isiSaldo?: (ke: `0x${s
         ...token, functionName: 'approve', args: [contract.address, maxUint256], gas: GAS_LIMIT.approve,
         account: wallet.account!, chain: k.chain,
       });
-      await pub.waitForTransactionReceipt({ hash });
+      await k.receipt(hash);
       log('bot', 'approve tIDRX ke contract');
     }
   }
@@ -47,7 +47,7 @@ export function buatBot(k: Koneksi, wallet: WalletClient, isiSaldo?: (ke: `0x${s
       ...contract, functionName: 'createOrder', args: [jenis, teks], gas: GAS_LIMIT.createOrder,
       account: wallet.account!, chain: k.chain,
     });
-    const r = await pub.waitForTransactionReceipt({ hash });
+    const r = await k.receipt(hash);
     if (r.status === 'success') stats.orders++; else stats.gagal++;
     log('bot', `#${stats.orders} ${label} "${teks}" ${formatRupiah(harga)} → ${r.status}`);
     return r.status === 'success';
