@@ -1,6 +1,6 @@
 // Order bot: buat satu order acak lewat jalur yang sama dengan penonton (approve tIDRX sekali, lalu createOrder).
 import { maxUint256, type WalletClient } from 'viem';
-import { formatRupiah, GAS_LIMIT, teksValid } from '@printpitt/shared';
+import { formatRupiah, GAS_LIMIT, NOL32, teksValid } from '@printpitt/shared';
 import { log, type Koneksi } from '../common.ts';
 
 const TEKS: Record<number, string[]> = {
@@ -39,12 +39,14 @@ export function buatBot(k: Koneksi, wallet: WalletClient, isiSaldo?: (ke: `0x${s
     const sesiAktif = await pub.readContract({ ...contract, functionName: 'sesiAktif' });
     if (!sesiAktif) return false;
     const jenis = acak([1, 2, 3, 4]);
-    const [harga, , , , aktif, label] = await pub.readContract({ ...contract, functionName: 'katalog', args: [jenis] });
+    // katalog v2: (hargaDasar, hargaPerHalaman, batasDasar, batasPerHalaman, langkah, jumlahLangkah, aktif, label); bot pesan 1 halaman
+    const [hargaDasar, hargaPerHalaman, , , , , aktif, label] = await pub.readContract({ ...contract, functionName: 'katalog', args: [jenis] });
+    const harga = hargaDasar + hargaPerHalaman;
     if (!aktif) return false;
     const teks = acak(TEKS[jenis]);
     await pastikanToken(harga);
     const hash = await wallet.writeContract({
-      ...contract, functionName: 'createOrder', args: [jenis, teks], gas: GAS_LIMIT.createOrder,
+      ...contract, functionName: 'createOrder', args: [jenis, teks, 1, NOL32, NOL32], gas: GAS_LIMIT.createOrder,
       account: wallet.account!, chain: k.chain,
     });
     const r = await k.receipt(hash);

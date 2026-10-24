@@ -1,9 +1,10 @@
 // Uji end-to-end service backend terhadap anvil (dijalankan oleh test/uji-anvil.sh).
 // Env: BASE (URL service), RPC_URL, ADMIN_TOKEN, ORIGIN_OK.
-import { createPublicClient, formatEther, http, parseSignature } from 'viem';
+import { createPublicClient, createWalletClient, formatEther, http, keccak256, parseSignature } from 'viem';
+import { anvil } from 'viem/chains';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
-  domainPesanan, domainTidrx, fotokopiKilatAbi, PERMIT_TYPES, PESANAN_TYPES, tidrxAbi,
+  domainPesanan, domainTidrx, fotokopiKilatAbi, NOL32, PERMIT_TYPES, PESANAN_TYPES, STATUS, tidrxAbi,
 } from '@printpitt/shared';
 
 const BASE = process.env.BASE, RPC = process.env.RPC_URL, ADMIN = process.env.ADMIN_TOKEN, ORIGIN_OK = process.env.ORIGIN_OK;
@@ -83,21 +84,23 @@ cek('bayar dua kali tidak mencetak dua kali', (await saldoT(penonton.address)) =
 { const r = await json(await post('/topup', { toBeMinted: '100000', destinationWalletAddress: penonton.address, paymentMethod: 'qris' }));
   cek('top-up QRIS → biaya 0,7%', r.status === 201 && r.body.fees[0].amount === 700 && !!r.body.qrString); }
 
-// 7. pesan tanpa MON lewat relayer (Pesanan EIP-712 + permit tIDRX)
+// 7. pesan tanpa MON lewat relayer (Pesanan EIP-712 + permit tIDRX): order dokumen nyata 4 halaman + kode serah terima
 const { timestamp: kini } = await pub.getBlock();
-const deadline = kini + 600n, harga = 500_000n, fee = BigInt(cfg.feeRelay), chainId = await pub.getChainId();
+const [harga] = await pub.readContract({ ...fk, functionName: 'hargaUntuk', args: [5, 4] });
+const deadline = kini + 3600n, fee = BigInt(cfg.feeRelay), chainId = await pub.getChainId();
+const rahasia = generatePrivateKey(), dokumen = keccak256('0x646f6b756d656e');
 const sigPermit = parseSignature(await penonton.signTypedData({
   domain: domainTidrx(chainId, cfg.token), types: PERMIT_TYPES, primaryType: 'Permit',
-  message: { owner: penonton.address, spender: cfg.contract, value: harga + fee, nonce: await pub.readContract({ ...token, functionName: 'nonces', args: [penonton.address] }), deadline },
+  message: { owner: penonton.address, spender: cfg.contract, value: 10_000_000n, nonce: await pub.readContract({ ...token, functionName: 'nonces', args: [penonton.address] }), deadline },
 }));
-const pesanan = { pelanggan: penonton.address, jenis: 1, teks: 'KTP penonton tanpa MON', deadline, maxFee: fee };
+const pesanan = { pelanggan: penonton.address, jenis: 5, teks: 'Skripsi bab 1-3', halaman: 4, dokumen, kodeHash: keccak256(rahasia), deadline, maxFee: fee };
 const sig = await penonton.signTypedData({
   domain: domainPesanan(chainId, cfg.contract), types: PESANAN_TYPES, primaryType: 'Pesanan',
   message: { ...pesanan, nonce: await pub.readContract({ ...fk, functionName: 'nonces', args: [penonton.address] }) },
 });
 const bodyRelay = {
   pesanan: { ...pesanan, deadline: String(deadline), maxFee: String(fee) }, sig,
-  izin: { value: String(harga + fee), deadline: String(deadline), v: String(sigPermit.v), r: sigPermit.r, s: sigPermit.s },
+  izin: { value: '10000000', deadline: String(deadline), v: String(sigPermit.v), r: sigPermit.r, s: sigPermit.s },
 };
 const saldoRelayer = await saldoT(cfg.relayer);
 { const r = await json(await post('/relay/order', { ...bodyRelay, pesanan: { ...bodyRelay.pesanan, teks: 'KTP diubah relayer' } }));
@@ -108,11 +111,42 @@ const rc = rr.body.hash && await pub.waitForTransactionReceipt({ hash: rr.body.h
 cek('createOrderFor sukses on-chain', rc?.status === 'success');
 const idBaru = (await pub.readContract({ ...fk, functionName: 'nextId' })) - 1n;
 const ordBaru = await pub.readContract({ ...fk, functionName: 'getOrder', args: [idBaru] });
-cek('order milik penonton, harga Rp5.000', ordBaru.pelanggan === penonton.address && ordBaru.harga === harga);
+cek('order milik penonton, 4 halaman, harga per halaman, hash dokumen', ordBaru.pelanggan === penonton.address && ordBaru.harga === harga && ordBaru.halaman === 4 && ordBaru.dokumen === dokumen, `harga ${harga}`);
 cek('penonton bayar harga + fee, MON tetap 0', (await saldoT(penonton.address)) === 5_000_000n - harga - fee && (await pub.getBalance({ address: penonton.address })) === 0n);
 cek('relayer menerima fee tIDRX', (await saldoT(cfg.relayer)) - saldoRelayer === fee);
 await jeda(400);
 { const r = await json(await post('/relay/order', bodyRelay)); cek('kirim ulang tanda tangan yang sama → 400 BadSignature', r.status === 400 && r.body.error === 'BadSignature', r.body.error); }
+
+// 7b. toko A claim → kerjakan → Siap → serah terima QR (kunci uji anvil #1)
+const tokoA = createWalletClient({ chain: anvil, account: privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d'), transport: http(RPC) });
+const tokoB = createWalletClient({ chain: anvil, account: privateKeyToAccount('0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a'), transport: http(RPC) });
+const kirimToko = async (w, functionName, args) => (await pub.waitForTransactionReceipt({ hash: await w.writeContract({ ...fk, functionName, args }) })).status;
+const statusOrder = async (id) => STATUS[(await pub.readContract({ ...fk, functionName: 'getOrder', args: [id] })).status];
+await kirimToko(tokoA, 'claim', [idBaru]);
+await kirimToko(tokoA, 'completeStep', [idBaru, 2]);
+cek('langkah terakhir → Siap (menunggu serah terima)', (await statusOrder(idBaru)) === 'Siap');
+{ let err = ''; try { await pub.simulateContract({ ...fk, functionName: 'serahkan', args: [idBaru, NOL32], account: tokoA.account }); } catch (e) { err = e.message; }
+  cek('serahkan dengan kode salah ditolak (BadCode)', /BadCode/.test(err)); }
+const saldoTokoA = await saldoT(tokoA.account.address);
+await kirimToko(tokoA, 'serahkan', [idBaru, rahasia]);
+cek('serahkan dengan QR benar → Finished, toko dibayar, NFT ke penonton',
+  (await statusOrder(idBaru)) === 'Finished' && (await saldoT(tokoA.account.address)) > saldoTokoA && (await pub.readContract({ ...fk, functionName: 'ownerOf', args: [idBaru] })) === penonton.address);
+
+// 7c. order kedua tidak dijemput → keeper menutup setelah batasJemput
+const rahasia2 = generatePrivateKey();
+const pesanan2 = { ...pesanan, teks: 'Makalah tidak dijemput', kodeHash: keccak256(rahasia2) };
+const sig2 = await penonton.signTypedData({ domain: domainPesanan(chainId, cfg.contract), types: PESANAN_TYPES, primaryType: 'Pesanan', message: { ...pesanan2, nonce: 1n } });
+const rr2 = await json(await post('/relay/order', { pesanan: { ...pesanan2, deadline: String(deadline), maxFee: String(fee) }, sig: sig2, izin: null }));
+cek('relay order kedua (allowance dari permit pertama) → 202', rr2.status === 202, rr2.body.error ?? '');
+await pub.waitForTransactionReceipt({ hash: rr2.body.hash });
+const id2 = (await pub.readContract({ ...fk, functionName: 'nextId' })) - 1n;
+await kirimToko(tokoB, 'claim', [id2]);
+await kirimToko(tokoB, 'completeStep', [id2, 2]);
+const jemput = await pub.readContract({ ...fk, functionName: 'batasJemput' });
+await rpc('evm_increaseTime', [Number(jemput) + 1]); await rpc('evm_mine');
+let st2 = 'Siap';
+for (let i = 0; i < 40 && st2 === 'Siap'; i++) { await jeda(250); st2 = await statusOrder(id2); }
+cek('keeper menutup order Siap yang tidak dijemput → Finished', st2 === 'Finished', st2);
 
 // 8. rate limit (RATE_LIMIT_PER_MIN=100 di runner): 50 permintaan lagi dari IP yang sama
 const rl = await Promise.all(Array.from({ length: 50 }, async () => (await post('/faucet', { address: 'x' })).status));

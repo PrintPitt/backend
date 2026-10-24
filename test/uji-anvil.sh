@@ -37,5 +37,6 @@ RPC_URL=$RPC CONTRACT_ADDRESS=$FK TOKEN_ADDRESS=$TIDRX BATAS_ANTRE=45 PORT=$PORT
 for i in $(seq 100); do curl -sf http://127.0.0.1:$PORT_API/health >/dev/null && break; sleep 0.1; done
 
 BASE=http://127.0.0.1:$PORT_API RPC_URL=$RPC ADMIN_TOKEN=uji-lokal ORIGIN_OK=https://fotokopi-kilat.vercel.app \
-  node test/uji-backend.mjs
-echo "--- log service (ekor) ---"; tail -6 "$LOG"
+  node test/uji-backend.mjs || GAGAL=1
+echo "--- log service (ekor) ---"; { grep -E "keeper|receipt|rpc" "$LOG" || true; } | tail -8; tail -4 "$LOG"
+exit "${GAGAL:-0}"

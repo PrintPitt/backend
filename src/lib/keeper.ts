@@ -1,7 +1,7 @@
-// Keeper: panggil `expire` untuk order yang lewat batas antre (Open) atau batas kerja (Claimed).
+// Keeper: panggil `expire` untuk order yang lewat batas antre (Open), batas kerja (Claimed), atau batas jemput (Siap).
 // Waktu dibandingkan dengan timestamp blok terbaru (bukan jam lokal), supaya cocok dengan contract.
 import type { WalletClient } from 'viem';
-import { GAS_LIMIT, STATUS } from '@printpitt/shared';
+import { GAS_LIMIT, STATUS, STATUS_FINAL } from '@printpitt/shared';
 import { log, pesanError, type Koneksi } from '../common.ts';
 
 export function buatKeeper(k: Koneksi, wallet: WalletClient) {
@@ -10,8 +10,11 @@ export function buatKeeper(k: Koneksi, wallet: WalletClient) {
   let berikutnya = 1n;
   const stats = { putaran: 0, expired: 0, gagal: 0 };
 
+  let batasJemput: bigint | null = null;
+
   async function putaran() {
     stats.putaran++;
+    batasJemput ??= BigInt(await pub.readContract({ ...contract, functionName: 'batasJemput' }));
     const nextId = await pub.readContract({ ...contract, functionName: 'nextId' });
     for (; berikutnya < nextId; berikutnya++) aktif.add(berikutnya);
     if (aktif.size === 0) return;
@@ -24,15 +27,19 @@ export function buatKeeper(k: Koneksi, wallet: WalletClient) {
     for (const [i, id] of ids.entries()) {
       const o = orders[i];
       const status = STATUS[o.status];
-      if (status === 'Finished' || status === 'Expired') { aktif.delete(id); continue; }
+      if ((STATUS_FINAL as readonly string[]).includes(status)) { aktif.delete(id); continue; }
+      // Sengketa menunggu operator (putuskan), bukan keeper.
       const lewat =
         (status === 'Open' && now >= BigInt(o.dibuatPada) + batasAntre) ||
-        (status === 'Claimed' && now >= BigInt(o.diclaimPada) + BigInt(o.batasKerja));
+        (status === 'Claimed' && now >= BigInt(o.diclaimPada) + BigInt(o.batasKerja)) ||
+        (status === 'Siap' && now >= BigInt(o.siapPada) + batasJemput);
       if (!lewat) continue;
       try {
-        const hash = await wallet.writeContract({ ...contract, functionName: 'expire', args: [id], gas: GAS_LIMIT.expire, account: wallet.account!, chain: k.chain });
+        // Siap = penyelesaian penuh (payout + refund + NFT), jauh lebih mahal dari refund biasa.
+        const gas = status === 'Siap' ? GAS_LIMIT.expireSiap : GAS_LIMIT.expire;
+        const hash = await wallet.writeContract({ ...contract, functionName: 'expire', args: [id], gas, account: wallet.account!, chain: k.chain });
         const r = await k.receipt(hash);
-        log('keeper', `expire #${id} (${status === 'Open' ? 'antre' : 'kerja'}) → ${r.status}`);
+        log('keeper', `expire #${id} (${status === 'Open' ? 'antre' : status === 'Claimed' ? 'kerja' : 'tidak dijemput'}) → ${r.status}`);
         if (r.status === 'success') { aktif.delete(id); stats.expired++; }
       } catch (e) {
         // Bisa kalah cepat dengan keeper lain / toko yang baru menyelesaikan; coba lagi putaran berikutnya.

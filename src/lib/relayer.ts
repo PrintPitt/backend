@@ -5,7 +5,7 @@ import {
   BaseError, ContractFunctionRevertedError, encodeFunctionData, getAddress, isAddress, isHex,
   type Address, type Hex, type WalletClient,
 } from 'viem';
-import { GAS_LIMIT, teksValid } from '@printpitt/shared';
+import { GAS_LIMIT, MAX_HALAMAN, NOL32, teksValid } from '@printpitt/shared';
 import { ApiError, jeda, log, pesanError, type Koneksi } from '../common.ts';
 import { buatAntrean } from './antrean.ts';
 
@@ -27,6 +27,10 @@ export function parsePesanan(body: Record<string, unknown>) {
   const jenis = Number(p.jenis);
   if (!Number.isInteger(jenis) || jenis < 1 || jenis > 255) throw new ApiError('BAD_JENIS', 400);
   if (typeof p.teks !== 'string' || !teksValid(p.teks)) throw new ApiError('BAD_TEKS', 400);
+  const halaman = p.halaman === undefined ? 1 : Number(p.halaman);
+  if (!Number.isInteger(halaman) || halaman < 1 || halaman > MAX_HALAMAN) throw new ApiError('BAD_HALAMAN', 400);
+  const dokumen = p.dokumen === undefined ? NOL32 : bytes32(p.dokumen, 'DOKUMEN');
+  const kodeHash = p.kodeHash === undefined ? NOL32 : bytes32(p.kodeHash, 'KODE');
   if (!isHex(body.sig) || body.sig.length !== 132) throw new ApiError('BAD_SIG', 400);
   const i = body.izin as Record<string, unknown> | null | undefined;
   const izin = i
@@ -34,7 +38,7 @@ export function parsePesanan(body: Record<string, unknown>) {
     : { value: 0n, deadline: 0n, v: 0, r: `0x${'0'.repeat(64)}` as Hex, s: `0x${'0'.repeat(64)}` as Hex };
   if (izin.v > 255) throw new ApiError('BAD_IZIN', 400);
   const pesanan = {
-    pelanggan: getAddress(p.pelanggan), jenis, teks: p.teks,
+    pelanggan: getAddress(p.pelanggan), jenis, teks: p.teks, halaman, dokumen, kodeHash,
     deadline: angka(p.deadline, 'DEADLINE'), maxFee: angka(p.maxFee, 'MAXFEE'),
   };
   return [pesanan, body.sig as Hex, izin] as const;

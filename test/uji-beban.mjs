@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import { createPublicClient, formatEther, http, parseSignature } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { monadTestnet } from 'viem/chains';
-import { domainPesanan, domainTidrx, fotokopiKilatAbi, formatRupiah, PERMIT_TYPES, PESANAN_TYPES, STATUS, teksValid, tidrxAbi } from '@printpitt/shared';
+import { domainPesanan, domainTidrx, fotokopiKilatAbi, formatRupiah, NOL32, PERMIT_TYPES, PESANAN_TYPES, STATUS, teksValid, tidrxAbi } from '@printpitt/shared';
 
 const N = Number(process.env.N ?? 30);
 const BASE = process.env.BASE ?? 'https://backend-production-2b31.up.railway.app';
@@ -175,14 +175,14 @@ async function loopToko(nama) {
 const tokoJalan = [loopToko('A'), loopToko('B')];
 
 const relayLat = [];
-const katalog = await pub.multicall({ contracts: [1, 2, 3, 4].map((j) => ({ ...fk, functionName: 'katalog', args: [j] })), allowFailure: false });
+const katalog = await pub.multicall({ contracts: [1, 2, 3, 4].map((j) => ({ ...fk, functionName: 'hargaUntuk', args: [j, 1] })), allowFailure: false });
 const { timestamp: tRelay } = await pub.getBlock();
 const relayRes = await Promise.all(penonton.map(async (p) => {
   const harga = katalog[p.jenis - 1][0];
   const fee = BigInt(cfg.feeRelay), deadline = tRelay + 600n;
   const nToken = 0n, nPesanan = 0n;                // akun baru: nonce permit dan nonce pesanan masih 0
   const iz = parseSignature(await p.akun.signTypedData({ domain: domainTidrx(cfg.chainId, cfg.token), types: PERMIT_TYPES, primaryType: 'Permit', message: { owner: p.akun.address, spender: cfg.contract, value: harga + fee, nonce: nToken, deadline } }));
-  const ps = { pelanggan: p.akun.address, jenis: p.jenis, teks: p.teks, deadline, maxFee: fee };
+  const ps = { pelanggan: p.akun.address, jenis: p.jenis, teks: p.teks, halaman: 1, dokumen: NOL32, kodeHash: NOL32, deadline, maxFee: fee }; // mode demo
   const sig = await p.akun.signTypedData({ domain: domainPesanan(cfg.chainId, cfg.contract), types: PESANAN_TYPES, primaryType: 'Pesanan', message: { ...ps, nonce: nPesanan } });
   const s = Date.now();
   const r = await api('/relay/order', { pesanan: { ...ps, deadline: String(deadline), maxFee: String(fee) }, sig, izin: { value: String(harga + fee), deadline: String(deadline), v: String(iz.v), r: iz.r, s: iz.s } });
@@ -215,7 +215,7 @@ for (let k = 0; k < 90 && !final; k++) {
     ids = []; for (let i = idAwal; i < next; i++) ids.push(i);
     orders = await pub.multicall({ contracts: ids.map((id) => ({ ...fk, functionName: 'getOrder', args: [id] })), allowFailure: false });
   } catch { statRpc.gagal++; await jeda(3000); continue; }
-  final = orders.every((o) => ['Finished', 'Expired'].includes(STATUS[o.status]));
+  final = orders.every((o) => ['Finished', 'Expired', 'Diputuskan'].includes(STATUS[o.status]));
   if (!final) await jeda(2000);
 }
 const hitung = (s) => orders.filter((o) => STATUS[o.status] === s).length;
