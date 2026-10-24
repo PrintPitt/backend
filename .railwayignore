@@ -1,0 +1,9 @@
+# `railway up` mengunggah berdasarkan file ini (bukan .dockerignore).
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+test
+scripts
+.git
+**/.DS_Store

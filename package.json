@@ -1,0 +1,20 @@
+{
+  "name": "fotokopi-kilat-ops",
+  "private": true,
+  "type": "module",
+  "description": "Backend Railway (faucet + top-up tIDRX + relayer + keeper + order bot) dan script operator",
+  "scripts": {
+    "start": "node src/server.ts",
+    "keeper": "node src/keeper.ts",
+    "bot": "node src/order-bot.ts",
+    "test": "bash test/uji-anvil.sh",
+    "sync-shared": "bash scripts/sync-shared.sh"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "dependencies": {
+    "@printpitt/shared": "file:vendor/printpitt-shared-0.1.0.tgz",
+    "viem": "^2.57.10"
+  }
+}
