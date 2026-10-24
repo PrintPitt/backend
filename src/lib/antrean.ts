@@ -37,10 +37,12 @@ export function buatAntrean(k: Koneksi, wallet: WalletClient, tag: string) {
           try {
             if (nonce === null) await syncNonce();
             const f = await fees();
-            const hash = await wallet.sendTransaction({
-              account: wallet.account!, chain: k.chain, ...job.req,
+            // Tanda tangani lokal lalu kirim raw: 1 request RPC per tx (sendTransaction viem menambah eth_chainId tiap kirim).
+            const mentah = await wallet.account!.signTransaction!({
+              type: 'eip1559', chainId: k.chainId, ...job.req,
               nonce: nonce!, maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas,
             });
+            const hash = await k.pub.sendRawTransaction({ serializedTransaction: mentah });
             nonce!++; stats.terkirim++;
             if (Date.now() - mulai > 5000) log(tag, `kirim lambat ${Date.now() - mulai} ms (coba ${coba + 1}, antre ${antre.length})`);
             job.resolve(hash);
